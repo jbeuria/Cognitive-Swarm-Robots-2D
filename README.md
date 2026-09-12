@@ -96,7 +96,7 @@ The fast state evolves as
 ```math
 \begin{aligned}
 \dot m_x^{ij}&=-2h_z^{ij}m_y^{ij}-\frac{m_x^{ij}}{T_2},\\
-\dot m_y^{ij}&=2\left(h_z^{ij}m_x^{ij}-\Gamma m_z^{ij}\right)-\frac{m_y^{ij}}{T_2},\\
+\dot m_y^{ij}&=2(h_z^{ij}m_x^{ij}-\Gamma m_z^{ij})-\frac{m_y^{ij}}{T_2},\\
 \dot m_z^{ij}&=2\Gamma m_y^{ij}-\frac{m_z^{ij}-m_{z,\mathrm{eq}}^{ij}}{T_1},
 \end{aligned}
 ```
@@ -170,10 +170,10 @@ The time of closest approach over a short horizon $T_a$ is
 \tau_{ij}^{*}
 =
 \mathrm{clip}_{[0,T_a]}
-\left(
+(
 -\frac{\mathbf r_{ij}\cdot\mathbf v_{ij}^{\mathrm{rel}}}
 {\|\mathbf v_{ij}^{\mathrm{rel}}\|^2+\varepsilon}
-\right),
+),
 ```
 and
 ```math
@@ -186,7 +186,7 @@ The controller uses the smaller of $\|\mathbf r_{ij}\|$ and $\|\mathbf r_{ij}^{*
 =
 q_i\sum_{j\in\mathcal N_i}
  k_{\mathrm{sep}}
- S\!\left(\frac{d_{\mathrm{safe}}-d_{ij}}{d_{\mathrm{safe}}}\right)
+ S\!(\frac{d_{\mathrm{safe}}-d_{ij}}{d_{\mathrm{safe}}})
  \hat{\mathbf n}_{ij},
 }
 ```
@@ -206,10 +206,10 @@ The predicted time of closest approach over horizon $T_p$ is
 \tau_{ia}^{*}
 =
 \mathrm{clip}_{[0,T_p]}
-\left(
+(
 -\frac{\mathbf r_{ia}\cdot\mathbf v_{ia}^{\mathrm{rel}}}
 {\|\mathbf v_{ia}^{\mathrm{rel}}\|^2+\varepsilon}
-\right).
+).
 }
 ```
 Then
@@ -224,13 +224,13 @@ The more threatening of the current and predicted clearances is denoted $d_{ia}$
 \mathbf A_i^{\mathrm{obs}}
 =
 q_i\sum_a
-S\!\left(
+S\!(
 \frac{\ell_{\mathrm{obs}}-d_{ia}}{\ell_{\mathrm{obs}}}
-\right)
+)
 (1+c_v\nu_{ia})
-\left[
+[
  k_r\hat{\mathbf n}_{ia}+k_t\hat{\mathbf t}_{ia}
-\right].
+].
 }
 ```
 Here $\nu_{ia}$ is the positive closing-speed contribution. The tangent $\hat{\mathbf t}_{ia}$ is chosen consistently for the flock: agents pass below an obstacle lying above the instantaneous flock centre and above one lying below it. This group-consistent side choice reduces unnecessary splitting and oscillation around an oncoming vehicle.
@@ -265,7 +265,7 @@ In 2-D let $\theta_i=\mathrm{atan2}(e_{iy},e_{ix})$ and $\theta_i^*=\mathrm{atan
 ```
 and the commanded yaw rate is
 ```math
-\boxed{\dot\psi_i^{\mathrm{cmd}}=\mathrm{clip}\left(\frac{\Delta\theta_i}{\Delta t},-\omega_{\max},\omega_{\max}\right).}
+\boxed{\dot\psi_i^{\mathrm{cmd}}=\mathrm{clip}(\frac{\Delta\theta_i}{\Delta t},-\omega_{\max},\omega_{\max}).}
 ```
 For a point-agent simulation,
 ```math
@@ -299,7 +299,7 @@ Define
 ```
 and
 ```math
-\boxed{\rho_i=\tanh\!\left(\frac{\|\mathbf{x}_i^r-\mathbf{x}_i\|}{L_r}\right)\,[\mathbf{e}_i\cdot\hat{\mathbf c}_i]_+.}
+\boxed{\rho_i=\tanh\!(\frac{\|\mathbf{x}_i^r-\mathbf{x}_i\|}{L_r})\,[\mathbf{e}_i\cdot\hat{\mathbf c}_i]_+.}
 ```
 Hence a separated agent accelerates only after it has turned approximately toward the rejoining reference. This prevents a speed boost in the wrong direction.
 
@@ -307,11 +307,11 @@ Hence a separated agent accelerates only after it has turned approximately towar
 
 The desired speed is
 ```math
-\boxed{v_i^*=\mathrm{clip}_{[v_{\min},v_{\max}]}\left\{v_0\left[1+\eta_r\rho_i-\frac{\eta_b}{2}\mu_i\right]\right\}.}
+\boxed{v_i^*=\mathrm{clip}_{[v_{\min},v_{\max}]}\{v_0[1+\eta_r\rho_i-\frac{\eta_b}{2}\mu_i]\}.}
 ```
 The physical acceleration command is
 ```math
-\boxed{a_i^{\mathrm{cmd}}=\mathrm{sat}_{[-a_{\mathrm{br}},a_{\mathrm{acc}}]}\left(\frac{v_i^*-v_i}{\tau_v}\right).}
+\boxed{a_i^{\mathrm{cmd}}=\mathrm{sat}_{[-a_{\mathrm{br}},a_{\mathrm{acc}}]}(\frac{v_i^*-v_i}{\tau_v}).}
 ```
 The interpretation is intentionally asymmetric:
 ```math
@@ -325,7 +325,7 @@ The interpretation is intentionally asymmetric:
 For the point-agent verifier,
 ```math
 \begin{aligned}
-v_i^{n+1}&=\mathrm{clip}_{[v_{\min},v_{\max}]}\left(v_i^n+a_i^{\mathrm{cmd}}\Delta t\right),\\
+v_i^{n+1}&=\mathrm{clip}_{[v_{\min},v_{\max}]}(v_i^n+a_i^{\mathrm{cmd}}\Delta t),\\
 \mathbf{x}_i^{n+1}&=\mathbf{x}_i^n+v_i^{n+1}\mathbf{e}_i^{n+1}\Delta t.
 \end{aligned}
 ```
@@ -454,7 +454,7 @@ After a vehicle passes a fixed distance behind the flock it becomes inactive, wa
 
 To show the desired split–reformation behaviour explicitly, the demo reports the number of connected flock components under the sensing graph
 ```math
-A_{ij}=\mathbf 1\!\left(\|\mathbf{x}_i-\mathbf{x}_j\|<R\right).
+A_{ij}=\mathbf 1\!(\|\mathbf{x}_i-\mathbf{x}_j\|<R).
 ```
 A close obstacle can temporarily increase the number of connected components; successful rejoining is indicated when the count returns to one, accompanied by a reduction of the flock span and rejoining demand $\rho_i$.
 
