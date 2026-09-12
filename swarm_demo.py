@@ -18,10 +18,12 @@ verification plant is removed; odometry is read and velocity/yaw-rate
 commands are published instead.
 """
 
+import argparse
 from dataclasses import dataclass
+from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
+from matplotlib.animation import FFMpegWriter, FuncAnimation, writers
 from matplotlib.collections import PolyCollection
 from matplotlib.patches import Patch, Rectangle
 from matplotlib.transforms import Affine2D
@@ -89,6 +91,67 @@ class Config:
     camera_dead_zone_x: float = 5.5
     camera_dead_zone_y: float = 3.0
     camera_response_time: float = 1.25
+
+
+DEFAULT_MOVIE = "cognitive_swarm_demo.mp4"
+
+
+def positive_int(value):
+    value = int(value)
+    if value < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return value
+
+
+def positive_float(value):
+    value = float(value)
+    if value <= 0.0:
+        raise argparse.ArgumentTypeError("must be greater than 0")
+    return value
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run the cognitive-swarm animation live or export it as an MP4."
+        )
+    )
+    parser.add_argument(
+        "--save", nargs="?", const=DEFAULT_MOVIE, default=None,
+        metavar="FILE.mp4",
+        help=(
+            "save an MP4 and exit; when FILE is omitted, use "
+            f"{DEFAULT_MOVIE!r}"
+        ),
+    )
+    parser.add_argument(
+        "--duration", type=positive_float, default=30.0, metavar="SECONDS",
+        help="simulated duration of an exported movie (default: 30)",
+    )
+    parser.add_argument(
+        "--fps", type=positive_int, default=25,
+        help="export playback frame rate (default: 25, matching model dt)",
+    )
+    parser.add_argument(
+        "--dpi", type=positive_int, default=140,
+        help="export resolution in dots per inch (default: 140)",
+    )
+    parser.add_argument(
+        "--agents", type=positive_int, default=36,
+        help="number of flock agents (default: 36)",
+    )
+    parser.add_argument(
+        "--obstacles", type=positive_int, default=5,
+        help="number of reusable obstacle slots (default: 5)",
+    )
+    parser.add_argument(
+        "--seed", type=int, default=11,
+        help="random seed for reproducible traffic (default: 11)",
+    )
+    args = parser.parse_args(argv)
+    if args.save is not None and Path(args.save).suffix.lower() != ".mp4":
+        parser.error("--save output must have an .mp4 extension")
+    return args
 
 
 class CognitiveSwarm:
@@ -333,10 +396,12 @@ def make_agent_formation(rng, N):
     return np.array(pts, dtype=float)
 
 
-def main():
-    rng = np.random.default_rng(11)
+def main(argv=None):
+    args = parse_args(argv)
+    rng = np.random.default_rng(args.seed)
     cfg = Config()
-    N = 36
+    cfg.obstacle_slots = args.obstacles
+    N = args.agents
 
     # Flock of small cars moving forward (+x). Coordinates are never wrapped
     # or reset; the plotting camera follows the flock instead.
@@ -647,18 +712,45 @@ def main():
 
         return [agents, centre, centre_trail, status, *obs_rects]
 
-    # Keep a live reference to prevent Matplotlib from garbage-collecting
-    # the animation before the GUI renders its first frame.
+    # A finite frame iterable is required for deterministic movie export.  Live
+    # mode intentionally has no frame limit and runs until its window is closed.
+    frames = (range(int(np.ceil(args.duration / cfg.dt)))
+              if args.save is not None else None)
     anim = FuncAnimation(
         fig, animate,
+        frames=frames,
         interval=int(cfg.dt * 1000),
         cache_frame_data=False,
         blit=False,
+        repeat=False,
     )
 
     plt.tight_layout()
-    plt.show(block=True)
-    _ = anim
+    if args.save is None:
+        # Keep a live reference while the GUI event loop owns the figure.
+        plt.show(block=True)
+    else:
+        if not writers.is_available("ffmpeg"):
+            raise RuntimeError(
+                "MP4 export requires FFmpeg. Install it (for example, "
+                "`brew install ffmpeg` or `sudo apt install ffmpeg`) and retry."
+            )
+        output = Path(args.save).expanduser()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        writer = FFMpegWriter(
+            fps=args.fps,
+            metadata={"title": "Cognitive Swarm Robots 2-D"},
+            bitrate=2400,
+        )
+        frame_count = len(frames)
+        print(
+            f"Saving {frame_count} frames ({args.duration:g} simulated s) "
+            f"to {output} ...",
+            flush=True,
+        )
+        anim.save(str(output), writer=writer, dpi=args.dpi)
+        plt.close(fig)
+        print(f"Saved MP4: {output.resolve()}", flush=True)
 
 
 if __name__ == "__main__":
