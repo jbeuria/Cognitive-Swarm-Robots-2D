@@ -2,6 +2,16 @@
 
 A self-contained cognitive-swarm controller with a real-time 2-D verifier and a ROS 2/Gazebo-ready control node. The verifier models predictive agent separation, moving-obstacle avoidance, bounded turning, evasive braking, and acceleration to rejoin the flock.
 
+## Research backbone and citation
+
+This repository builds on the theoretical and computational framework developed in the following articles:
+
+1. **Jyotiranjan Beuria and Amit Shukla**, “[Lindblad-Inspired Multi-Timescale Reservoir Computing with Separable Rotation and Dissipation](https://arxiv.org/abs/2608.04028),” arXiv:2608.04028 [cs.LG], 2026. DOI: [10.48550/arXiv.2608.04028](https://doi.org/10.48550/arXiv.2608.04028).
+2. **Jyotiranjan Beuria**, “[Self-Healing Coordination in Cognitive Swarm Agents with Bloch-Type Perceptual Memory](https://arxiv.org/abs/2607.11960),” arXiv:2607.11960 [nlin.AO], 2026. DOI: [10.48550/arXiv.2607.11960](https://doi.org/10.48550/arXiv.2607.11960).
+3. **Jyotiranjan Beuria**, “[Non-Markovian Collective Motion from Self-Regulated Perceptual Dynamics](https://arxiv.org/abs/2510.23688),” arXiv:2510.23688 [physics.soc-ph], 2025. DOI: [10.48550/arXiv.2510.23688](https://doi.org/10.48550/arXiv.2510.23688).
+
+> If you use, adapt, or extend this repository, its equations, or its controller architecture, please cite these three articles. They provide the conceptual backbone for the multi-timescale dynamics, Bloch-type perceptual memory, non-Markovian collective motion, and self-healing swarm coordination implemented here.
+
 ## Quick start
 
 Python 3.9 or newer is recommended. A clean virtual environment avoids conflicts with system Python packages:
@@ -150,7 +160,7 @@ The time of closest approach over a short horizon $T_a$ is
 ```math
 \tau_{ij}^{*}
 =
-\operatorname{clip}_{[0,T_a]}
+\mathrm{clip}_{[0,T_a]}
 \left(
 -\frac{\mathbf r_{ij}\cdot\mathbf v_{ij}^{\mathrm{rel}}}
 {\|\mathbf v_{ij}^{\mathrm{rel}}\|^2+\varepsilon}
@@ -186,7 +196,7 @@ The predicted time of closest approach over horizon $T_p$ is
 \boxed{
 \tau_{ia}^{*}
 =
-\operatorname{clip}_{[0,T_p]}
+\mathrm{clip}_{[0,T_p]}
 \left(
 -\frac{\mathbf r_{ia}\cdot\mathbf v_{ia}^{\mathrm{rel}}}
 {\|\mathbf v_{ia}^{\mathrm{rel}}\|^2+\varepsilon}
@@ -240,13 +250,13 @@ with $\hat{\mathbf d}_i=\mathbf{e}_i$ if the norm is numerically zero.
 
 ## Bounded heading actuation
 
-In 2-D let $\theta_i=\operatorname{atan2}(e_{iy},e_{ix})$ and $\theta_i^*=\operatorname{atan2}(\hat d_{iy},\hat d_{ix})$. Then
+In 2-D let $\theta_i=\mathrm{atan2}(e_{iy},e_{ix})$ and $\theta_i^*=\mathrm{atan2}(\hat d_{iy},\hat d_{ix})$. Then
 ```math
-\Delta\theta_i=\operatorname{wrap}(\theta_i^*-\theta_i),
+\Delta\theta_i=\mathrm{wrap}(\theta_i^*-\theta_i),
 ```
 and the commanded yaw rate is
 ```math
-\boxed{\dot\psi_i^{\mathrm{cmd}}=\operatorname{clip}\left(\frac{\Delta\theta_i}{\Delta t},-\omega_{\max},\omega_{\max}\right).}
+\boxed{\dot\psi_i^{\mathrm{cmd}}=\mathrm{clip}\left(\frac{\Delta\theta_i}{\Delta t},-\omega_{\max},\omega_{\max}\right).}
 ```
 For a point-agent simulation,
 ```math
@@ -288,11 +298,11 @@ Hence a separated agent accelerates only after it has turned approximately towar
 
 The desired speed is
 ```math
-\boxed{v_i^*=\operatorname{clip}_{[v_{\min},v_{\max}]}\left\{v_0\left[1+\eta_r\rho_i-\frac{\eta_b}{2}\mu_i\right]\right\}.}
+\boxed{v_i^*=\mathrm{clip}_{[v_{\min},v_{\max}]}\left\{v_0\left[1+\eta_r\rho_i-\frac{\eta_b}{2}\mu_i\right]\right\}.}
 ```
 The physical acceleration command is
 ```math
-\boxed{a_i^{\mathrm{cmd}}=\operatorname{sat}_{[-a_{\mathrm{br}},a_{\mathrm{acc}}]}\left(\frac{v_i^*-v_i}{\tau_v}\right).}
+\boxed{a_i^{\mathrm{cmd}}=\mathrm{sat}_{[-a_{\mathrm{br}},a_{\mathrm{acc}}]}\left(\frac{v_i^*-v_i}{\tau_v}\right).}
 ```
 The interpretation is intentionally asymmetric:
 ```math
@@ -306,7 +316,7 @@ The interpretation is intentionally asymmetric:
 For the point-agent verifier,
 ```math
 \begin{aligned}
-v_i^{n+1}&=\operatorname{clip}_{[v_{\min},v_{\max}]}\left(v_i^n+a_i^{\mathrm{cmd}}\Delta t\right),\\
+v_i^{n+1}&=\mathrm{clip}_{[v_{\min},v_{\max}]}\left(v_i^n+a_i^{\mathrm{cmd}}\Delta t\right),\\
 \mathbf{x}_i^{n+1}&=\mathbf{x}_i^n+v_i^{n+1}\mathbf{e}_i^{n+1}\Delta t.
 \end{aligned}
 ```
@@ -429,7 +439,7 @@ Each demonstration obstacle is assigned a speed $u_a$ sampled independently for 
 ```
 where the turn-rate target is piecewise-random and the applied turn rate approaches that target smoothly. The relative heading remains bounded around the oncoming direction,
 ```math
-|\operatorname{wrap}(\phi_a-\pi)|\leq \phi_{\max}.
+|\mathrm{wrap}(\phi_a-\pi)|\leq \phi_{\max}.
 ```
 After a vehicle passes a fixed distance behind the flock it becomes inactive, waits for a random interval, and is spawned far ahead of the flock's current global position with a new speed, lateral offset, and heading. This is asynchronous obstacle generation, not a periodic boundary condition on the swarm.
 
