@@ -72,9 +72,13 @@ The complete agent state is therefore
 
 For sensing radius $R$,
 ```math
-A_{ij}(t)=\begin{cases}1,&0<\|\mathbf{x}_i-\mathbf{x}_j\|<R,\\0,&\text{otherwise},\end{cases}
+A_{ij}(t)=
+\begin{cases}
+1, & 0 < \|\mathbf{x}_i-\mathbf{x}_j\| < R, \\
+0, & \text{otherwise}.
+\end{cases}
 \qquad
-\mathcal N_i(t)=\{j:A_{ij}=1\}.
+\mathcal{N}_i(t)=\{j:A_{ij}(t)=1\}.
 ```
 The graph is recomputed at every controller step.
 
@@ -110,7 +114,12 @@ Inactive channels make no alignment contribution. In the reference implementatio
 
 The mean resolved alignment is
 ```math
-M_i=\begin{cases}\displaystyle \frac{1}{|\mathcal N_i|}\sum_{j\in\mathcal N_i}m_z^{ij},&|\mathcal N_i|>0,\\0,&|\mathcal N_i|=0.\end{cases}
+M_i=
+\begin{cases}
+\displaystyle \frac{1}{|\mathcal{N}_i|}
+\sum_{j\in\mathcal{N}_i}m_z^{ij}, & |\mathcal{N}_i|>0, \\
+0, & |\mathcal{N}_i|=0.
+\end{cases}
 ```
 The slow target and slow-state dynamics are
 ```math
