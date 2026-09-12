@@ -484,3 +484,40 @@ These are controller-level working defaults, not universal optima. The tuning em
 ## Practical recommendation for Gazebo transition
 
 First validate three separate cases: (i) $\eta_r=\eta_b=0$ to reproduce the constant-speed baseline, (ii) $\eta_r>0,\eta_b=0$ to isolate rejoining acceleration, and (iii) $\eta_r>0,\eta_b>0$ with moving obstacles. Only after the controller-level behavior is stable should the point-agent plant be replaced with a multirotor model. This preserves a clean distinction between cognitive/swarm dynamics and vehicle dynamics.
+
+## Gazebo readiness: remaining work and suggestions
+
+The mathematical controller in `ros2_swarm_node.py` has been checked numerically against `swarm_demo.py`: all 31 shared controller defaults and all 11 compared controller outputs agree on identical physical and obstacle states. The remaining work concerns the ROS 2/Gazebo interface, safety handling, and vehicle-specific dynamics rather than the cognitive equations.
+
+### Required before the first Gazebo experiment
+
+- **Choose the vehicle command model.** The current node publishes `TwistStamped` with world-frame planar velocity. Retain this for a holonomic vehicle or multirotor bridge that explicitly accepts world-frame velocity. For a differential-drive or other nonholonomic model, publish body-frame `Twist` with forward `linear.x`, zero `linear.y`, and the bounded yaw rate in `angular.z`.
+- **Preserve bounded-heading motion.** In nonholonomic mode, translation must follow the current or one-step yaw-limited heading rather than jumping immediately to the desired world direction. This makes Gazebo motion consistent with the standalone verifier.
+- **Define and verify frames.** Transform every agent pose and every obstacle state into one shared world or odometry frame. Do not rely on the hard-coded `world` frame until the Gazebo model, odometry bridge, and TF tree use the same convention.
+- **Provide obstacle tracking.** The random traffic generator belongs only to the standalone animation. Gazebo needs a separate publisher for `/swarm/obstacles`, including obstacle centre, planar velocity, and conservative radius.
+- **Match topics and message types.** Configure the Gazebo bridge or controller topics to match `/agent_i/odom` and `/agent_i/cmd_vel`, or expose topic templates as ROS parameters. Confirm whether the selected plugin consumes `Twist` or `TwistStamped`.
+- **Add stale-data protection.** Timestamp odometry and obstacle observations, reject stale inputs, and command a safe stop when required state data is missing or delayed.
+- **Use measured controller time.** Integrate the internal state with elapsed ROS time, clamped to a safe range, instead of assuming every timer callback occurs at exactly `0.04` seconds.
+- **Handle startup from rest.** Ramp speed from zero using the acceleration bound. A physical Gazebo robot normally starts below the model's nominal minimum moving speed.
+- **Configure QoS explicitly.** Select odometry and obstacle QoS profiles compatible with the chosen Gazebo bridge, especially when sensor streams use best-effort delivery.
+- **Expose tuning parameters.** Make safety radius, prediction horizons, steering gains, speed limits, acceleration limits, and time constants ROS parameters so they can be adjusted without editing the node.
+
+### Suggested implementation order
+
+1. Add selectable `holonomic_world` and `diff_drive_body` command modes.
+2. Add frame parameters, TF conversion, observation timestamps, and timeout-based safe stop.
+3. Add measured-time integration and acceleration-limited startup.
+4. Create the Gazebo obstacle-state publisher and bridge configuration.
+5. Add an automated parity test so later edits cannot silently diverge from `swarm_demo.py`.
+6. Package the node with ROS 2 launch, parameter, URDF/SDF, and bridge configuration files.
+
+### Suggested validation sequence
+
+1. One robot with no obstacles: verify frames, sign conventions, speed ramp, yaw direction, and stopping behavior.
+2. Multiple robots with fixed speed: set $\eta_r=\eta_b=0$ and reproduce the baseline flock.
+3. Enable rejoining acceleration without obstacles and verify recovery from separated initial groups.
+4. Add one stationary obstacle, then one constant-velocity obstacle, before enabling randomized traffic.
+5. Inject delayed and dropped odometry/obstacle messages and verify safe-stop recovery.
+6. Increase swarm size gradually while recording minimum clearance, connected components, recovery time, tracking error, command saturation, and real-time factor.
+
+The controller should be described as **model-compatible and Gazebo-prepared**, but not fully Gazebo-integrated until the vehicle command mode, frames, bridge, obstacle publisher, and fail-safe behavior have been selected and tested with a concrete robot model.
