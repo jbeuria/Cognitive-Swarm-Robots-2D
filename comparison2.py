@@ -57,9 +57,9 @@ import csv
 import shutil
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
 
 import numpy as np
-from tqdm import tqdm
 
 from swarm_demo import Config, CognitiveSwarm, make_agent_formation
 
@@ -427,6 +427,357 @@ def simulate_recovery(
         recovery_burden,
         recovery_time,
         baseline_span,
+    )
+
+
+# ============================================================
+# Present-controller obstacle/recovery videos
+# ============================================================
+
+def _vehicle_polygons(centres, directions, length, width):
+    """Return car-shaped polygons for the animation collections."""
+    local = np.array([
+        [-0.50 * length, -0.50 * width],
+        [0.28 * length, -0.50 * width],
+        [0.50 * length, 0.0],
+        [0.28 * length, 0.50 * width],
+        [-0.50 * length, 0.50 * width],
+    ])
+    polygons = []
+    for centre, direction in zip(centres, directions):
+        normal = np.array([-direction[1], direction[0]])
+        basis = np.column_stack([direction, normal])
+        polygons.append(local @ basis.T + centre)
+    return polygons
+
+
+def _compact_video_formation(rng, count):
+    """Tight hexagonal packing just above the controller safety distance."""
+    columns = int(np.ceil(np.sqrt(count)))
+    rows = int(np.ceil(count / columns))
+    spacing = 2.50
+    row_spacing = 0.5 * np.sqrt(3.0) * spacing
+    points = []
+    for row in range(rows):
+        for column in range(columns):
+            if len(points) == count:
+                break
+            points.append([
+                column * spacing + 0.5 * spacing * (row % 2),
+                row * row_spacing,
+            ])
+    points = np.asarray(points, dtype=float)
+    points -= points.mean(axis=0)
+    return points + rng.normal(0.0, 0.01, (count, 2))
+
+
+def export_present_recovery_video(
+    agent_count,
+    steps,
+    output,
+    fps=25,
+    dpi=100,
+    seed=2026,
+    obstacle_speed_ratio=0.0,
+):
+    """Animate avoidance followed by autonomous post-encounter recovery."""
+    import matplotlib.pyplot as plt
+    from matplotlib.animation import FFMpegWriter, FuncAnimation
+    from matplotlib.collections import PolyCollection
+    from matplotlib.patches import Patch, Rectangle
+    from matplotlib.transforms import Affine2D
+    from swarm_demo_random_obstacles import apply_safety_shield
+
+    c = config_for("Present Controller")
+    # Match the fixed-obstacle visualization configuration used by
+    # swarm_demo_random_obstacles.py.  Static objects are fully predictable,
+    # so the controller uses its shorter response range.
+    stationary_obstacles = obstacle_speed_ratio == 0.0
+    if stationary_obstacles:
+        c.obstacle_margin = 2.0
+    else:
+        # For these small close-encounter visualizations, retain predictive
+        # avoidance but use a compact response envelope.  The geometric shield
+        # below still guarantees a clearly visible 0.4-unit body clearance.
+        c.obstacle_margin = 1.0
+    rng = np.random.default_rng(seed + 1009 * agent_count)
+
+    x = _compact_video_formation(rng, agent_count)
+    theta = rng.normal(0.0, 0.035, agent_count)
+    heading = np.column_stack([np.cos(theta), np.sin(theta)])
+    speed = np.full(agent_count, c.v0)
+    ctl = CognitiveSwarm(agent_count, c)
+
+    centre0 = x.mean(axis=0)
+    formation_height = np.ptp(x[:, 1])
+    # Scale the stagger to the smaller comparison flocks.  This is the same
+    # near-path arrangement as the larger random-obstacle demonstration, but
+    # avoids a fixed offset that would leave N=10 almost unperturbed.
+    lateral_offset = max(1.0, min(3.5, 0.25 * formation_height))
+    forward_edge = x[:, 0].max()
+    forward_offsets = (10.0, 24.0) if stationary_obstacles else (28.0, 50.0)
+    obs_x = np.array([
+        [forward_edge + forward_offsets[0], centre0[1] + lateral_offset],
+        [forward_edge + forward_offsets[1], centre0[1] - lateral_offset],
+    ])
+    if stationary_obstacles:
+        obs_vel = np.zeros((2, 2))
+    else:
+        obstacle_speed = obstacle_speed_ratio * c.v0
+        obs_vel = np.array([
+            [-obstacle_speed, 0.0],
+            [-obstacle_speed, 0.0],
+        ])
+    obs_heading = np.arctan2(obs_vel[:, 1], obs_vel[:, 0])
+
+    centred0 = x - centre0
+    baseline_radius = float(
+        np.sqrt(np.mean(np.sum(centred0 * centred0, axis=1)))
+    )
+    peak_radius = baseline_radius
+    body_diameter = np.hypot(c.agent_length, c.agent_width)
+    visible_obstacle_clearance = 0.40
+    obs_radius = np.full(2, body_diameter + visible_obstacle_clearance)
+    hard_agent_distance = body_diameter + 0.18
+    hard_obstacle_distance = body_diameter + visible_obstacle_clearance
+    minimum_agent_clearance = np.inf
+    minimum_obstacle_clearance = np.inf
+    minimum_polarization = 1.0
+
+    fig, ax = plt.subplots(figsize=(10.4, 6.4))
+    ax.set_aspect("equal")
+    ax.set_facecolor("#f7f8f4")
+    ax.grid(True, color="#d7ddd7", linewidth=0.55, alpha=0.75)
+    ax.set_xlabel("global x")
+    ax.set_ylabel("global y")
+    motion_label = (
+        "static obstacles"
+        if stationary_obstacles
+        else f"moving obstacles {obstacle_speed_ratio:g}x"
+    )
+    obstacle_kind = "static obstacle" if stationary_obstacles else "moving obstacle"
+    ax.set_title(
+        f"Present controller: {motion_label} and recovery | N={agent_count}"
+    )
+
+    speed_norm = plt.Normalize(c.v_min, c.v_max)
+    agents = PolyCollection(
+        _vehicle_polygons(x, heading, c.agent_length, c.agent_width),
+        facecolors=plt.cm.Blues(speed_norm(speed)),
+        edgecolors="#17365d",
+        linewidths=0.42,
+        zorder=4,
+    )
+    ax.add_collection(agents)
+
+    obstacle_colours = ("#e4572e", "#7b2cbf")
+    obstacle_rectangles = []
+    for index in range(2):
+        rectangle = Rectangle(
+            (-0.5 * c.agent_length, -0.5 * c.agent_width),
+            c.agent_length,
+            c.agent_width,
+            facecolor=obstacle_colours[index],
+            edgecolor="black",
+            linewidth=0.85,
+            alpha=0.9,
+            zorder=3,
+        )
+        ax.add_patch(rectangle)
+        obstacle_rectangles.append(rectangle)
+
+    centre_marker = ax.scatter(
+        [], [], marker="x", s=55, color="#111111", zorder=5
+    )
+    status = ax.text(
+        0.01, 0.99, "", transform=ax.transAxes, va="top", ha="left"
+    )
+    ax.legend(
+        handles=[
+            Patch(
+                facecolor=plt.cm.Blues(0.65), edgecolor="#17365d",
+                label="swarm agent",
+            ),
+            Patch(
+                facecolor=obstacle_colours[0], edgecolor="black",
+                label=f"{obstacle_kind} 1",
+            ),
+            Patch(
+                facecolor=obstacle_colours[1], edgecolor="black",
+                label=f"{obstacle_kind} 2",
+            ),
+        ],
+        loc="lower right",
+    )
+
+    step_number = 0
+
+    def update_view():
+        centre = x.mean(axis=0)
+        ax.set_xlim(centre[0] - 43.0, centre[0] + 43.0)
+        ax.set_ylim(centre[1] - 22.0, centre[1] + 22.0)
+        for index, rectangle in enumerate(obstacle_rectangles):
+            rectangle.set_transform(
+                Affine2D()
+                .rotate_deg(np.degrees(obs_heading[index]))
+                .translate(*obs_x[index])
+                + ax.transData
+            )
+
+    def current_phase(centre):
+        relative_x = obs_x[:, 0] - centre[0]
+        if np.any(np.abs(relative_x) <= 12.0):
+            return "avoidance / flock deformation"
+        if np.max(relative_x) > 12.0:
+            return "approach"
+        return "post-obstacle self-healing"
+
+    def animate(_):
+        nonlocal x, heading, speed, obs_x, step_number, peak_radius
+        nonlocal minimum_agent_clearance, minimum_obstacle_clearance
+        nonlocal minimum_polarization
+
+        step_number += 1
+        old_x = x.copy()
+        old_obs_x = obs_x.copy()
+        centre = x.mean(axis=0)
+        out = ctl.commands(
+            x,
+            heading,
+            speed,
+            obs_x,
+            obs_vel,
+            obs_radius,
+            rejoin_reference=centre,
+        )
+        x, heading, speed = plant_step(
+            x,
+            heading,
+            speed,
+            out,
+            c,
+            variable_speed=True,
+        )
+        proposed_x = x.copy()
+        proposed_obs_x = old_obs_x + obs_vel * c.dt
+        substeps = 4
+        agent_delta = (proposed_x - old_x) / substeps
+        obstacle_delta = (proposed_obs_x - old_obs_x) / substeps
+        safe_x = old_x.copy()
+        safe_obs_x = old_obs_x.copy()
+        for _ in range(substeps):
+            safe_x += agent_delta
+            safe_obs_x += obstacle_delta
+            safe_x = apply_safety_shield(
+                safe_x,
+                safe_obs_x,
+                hard_agent_distance,
+                hard_obstacle_distance,
+            )
+        x = safe_x
+        obs_x = safe_obs_x
+
+        centre = x.mean(axis=0)
+        centred = x - centre
+        radius = float(np.sqrt(np.mean(np.sum(centred * centred, axis=1))))
+        peak_radius = max(peak_radius, radius)
+        compactness = 100.0 * baseline_radius / max(radius, 1e-12)
+        polarization = float(np.linalg.norm(heading.mean(axis=0)))
+        minimum_polarization = min(minimum_polarization, polarization)
+
+        pair_distance = np.linalg.norm(
+            x[:, None, :] - x[None, :, :], axis=2
+        )
+        np.fill_diagonal(pair_distance, np.inf)
+        agent_clearance = float(pair_distance.min() - body_diameter)
+        obstacle_clearance = float(np.min(
+            np.linalg.norm(x[:, None, :] - obs_x[None, :, :], axis=2)
+            - body_diameter
+        ))
+        minimum_agent_clearance = min(
+            minimum_agent_clearance, agent_clearance
+        )
+        minimum_obstacle_clearance = min(
+            minimum_obstacle_clearance, obstacle_clearance
+        )
+
+        agents.set_verts(
+            _vehicle_polygons(x, heading, c.agent_length, c.agent_width)
+        )
+        agents.set_facecolors(plt.cm.Blues(speed_norm(speed)))
+        centre_marker.set_offsets(centre.reshape(1, 2))
+        update_view()
+
+        status.set_text(
+            f"step = {step_number}/{steps}   phase = {current_phase(centre)}\n"
+            f"obstacle speed = {obstacle_speed_ratio:g}x nominal\n"
+            f"agent speed mean/min/max = {speed.mean():.2f} / "
+            f"{speed.min():.2f} / {speed.max():.2f}\n"
+            f"heading coherence = {polarization:.3f} "
+            f"(run minimum {minimum_polarization:.3f})\n"
+            f"flock RMS radius = {radius:.2f}   compactness vs start = "
+            f"{compactness:.1f}%\n"
+            f"clearance now = {agent_clearance:.2f} agent / "
+            f"{obstacle_clearance:.2f} obstacle\n"
+            f"run minima = {minimum_agent_clearance:.2f} / "
+            f"{minimum_obstacle_clearance:.2f}"
+        )
+        return [
+            agents, centre_marker, status, *obstacle_rectangles
+        ]
+
+    update_view()
+
+    def init_animation():
+        centre_marker.set_offsets(centre0.reshape(1, 2))
+        status.set_text(
+            f"step = 0/{steps}   phase = approach\n"
+            f"obstacle speed = {obstacle_speed_ratio:g}x nominal\n"
+            f"flock RMS radius = {baseline_radius:.2f}   "
+            "compactness vs start = 100.0%"
+        )
+        return [
+            agents, centre_marker, status, *obstacle_rectangles
+        ]
+
+    animation = FuncAnimation(
+        fig,
+        animate,
+        frames=range(steps),
+        interval=int(c.dt * 1000),
+        init_func=init_animation,
+        cache_frame_data=False,
+        blit=False,
+        repeat=False,
+    )
+    plt.tight_layout()
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    writer = FFMpegWriter(
+        fps=fps,
+        metadata={
+            "title": "Present controller obstacle encounter and self-healing",
+            "comment": (
+                f"agents={agent_count}; steps={steps}; "
+                f"obstacle_speed_ratio={obstacle_speed_ratio:g}; "
+                "obstacles=2; visible_clearance=0.4"
+            ),
+        },
+        bitrate=2200,
+    )
+    print(
+        f"Exporting {output} (N={agent_count}, {steps} steps) ...",
+        flush=True,
+    )
+    animation.save(str(output), writer=writer, dpi=dpi)
+    plt.close(fig)
+    print(
+        f"Saved {output.resolve()} | minimum clearances: "
+        f"agent-agent={minimum_agent_clearance:.6f}, "
+        f"agent-obstacle={minimum_obstacle_clearance:.6f}; "
+        f"peak RMS radius={peak_radius:.6f}; "
+        f"minimum polarization={minimum_polarization:.6f}",
+        flush=True,
     )
 
 
@@ -1085,6 +1436,64 @@ def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
+        "--save-recovery-videos",
+        action="store_true",
+        help=(
+            "export Present Controller obstacle-encounter/recovery videos "
+            "for N=10, 20, and 30, then exit"
+        ),
+    )
+
+    parser.add_argument(
+        "--video-output-dir",
+        type=Path,
+        default=Path("comparison2_present_controller_videos"),
+        help=(
+            "folder for recovery MP4 files "
+            "(default: comparison2_present_controller_videos)"
+        ),
+    )
+
+    parser.add_argument(
+        "--video-steps",
+        type=int,
+        default=1000,
+        help="simulation steps per recovery video (default: 1000)",
+    )
+
+    parser.add_argument(
+        "--video-fps",
+        type=int,
+        default=25,
+        help="recovery-video playback frame rate (default: 25)",
+    )
+
+    parser.add_argument(
+        "--video-dpi",
+        type=int,
+        default=100,
+        help="recovery-video resolution in dots per inch (default: 100)",
+    )
+
+    parser.add_argument(
+        "--video-seed",
+        type=int,
+        default=2026,
+        help="base random seed for recovery videos (default: 2026)",
+    )
+
+    parser.add_argument(
+        "--video-obstacle-speed-ratios",
+        nargs="+",
+        type=float,
+        default=[0.0],
+        help=(
+            "obstacle-speed multiples of nominal agent speed; 0 is static "
+            "(default: 0)"
+        ),
+    )
+
+    parser.add_argument(
         "--seeds",
         type=int,
         default=DEFAULT_NSEEDS,
@@ -1105,6 +1514,45 @@ def main():
     )
 
     args = parser.parse_args()
+
+    if args.save_recovery_videos:
+        if args.video_steps < 1 or args.video_fps < 1 or args.video_dpi < 1:
+            parser.error("video steps, fps, and dpi must all be positive")
+        if any(ratio < 0.0 for ratio in args.video_obstacle_speed_ratios):
+            parser.error("video obstacle speed ratios cannot be negative")
+        if shutil.which("ffmpeg") is None:
+            parser.error("video export requires FFmpeg")
+        args.video_output_dir.mkdir(parents=True, exist_ok=True)
+        for obstacle_speed_ratio in args.video_obstacle_speed_ratios:
+            speed_label = f"{obstacle_speed_ratio:g}x".replace(".", "p")
+            ratio_output_dir = (
+                args.video_output_dir
+                if obstacle_speed_ratio == 0.0
+                else args.video_output_dir / f"speed_{speed_label}"
+            )
+            ratio_output_dir.mkdir(parents=True, exist_ok=True)
+            for agent_count in N_VALUES:
+                speed_suffix = (
+                    ""
+                    if obstacle_speed_ratio == 0.0
+                    else f"_speed_{speed_label}"
+                )
+                filename = (
+                    f"present_controller_recovery_N{agent_count}"
+                    f"{speed_suffix}_{args.video_steps}_steps.mp4"
+                )
+                export_present_recovery_video(
+                    agent_count=agent_count,
+                    steps=args.video_steps,
+                    output=ratio_output_dir / filename,
+                    fps=args.video_fps,
+                    dpi=args.video_dpi,
+                    seed=args.video_seed,
+                    obstacle_speed_ratio=obstacle_speed_ratio,
+                )
+        return
+
+    from tqdm import tqdm
 
     nseeds = args.seeds
 

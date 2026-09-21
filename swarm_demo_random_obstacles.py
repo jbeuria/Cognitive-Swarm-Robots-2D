@@ -1,4 +1,4 @@
-"""Centroid-tracking two-obstacle experiments for the cognitive swarm.
+"""Two-obstacle experiments for the cognitive swarm.
 
 The two obstacles are the same size as a flock agent but use contrasting
 colours. Their moving targets are anchored to the instantaneous flock
@@ -6,7 +6,8 @@ centroid, so they remain with the flock and make repeated smooth intrusions.
 The default batch exports N=50, 100, and 200 at 0.5x, 1x, and 1.5x the minimum
 centroid-relative obstacle speed. A final geometric safety shield guarantees
 that circumscribed agent bodies do not overlap. Every movie contains 1,000
-simulation steps.
+simulation steps. The stationary variant places two staggered obstacles close
+to the initial forward path with a realistic visible clearance buffer.
 """
 
 import argparse
@@ -68,10 +69,28 @@ def parse_args(argv=None):
         "--steps", type=positive_int, default=1000,
         help="simulation steps per movie (default: 1000)",
     )
+    parser.add_argument(
+        "--stationary-obstacle", action="store_true",
+        help=(
+            "use two zero-speed obstacles fixed near the initial swarm path; "
+            "speed ratios are ignored"
+        ),
+    )
+    parser.add_argument(
+        "--static-obstacle-count", type=int, choices=(0, 1, 2), default=None,
+        help=(
+            "run a fixed-obstacle case with 0, 1, or 2 obstacles; speed "
+            "ratios are ignored"
+        ),
+    )
     parser.add_argument("--fps", type=positive_int, default=25)
     parser.add_argument("--dpi", type=positive_int, default=100)
     parser.add_argument("--seed", type=int, default=2026)
     args = parser.parse_args(argv)
+    if args.stationary_obstacle and args.static_obstacle_count is not None:
+        parser.error(
+            "use either --stationary-obstacle or --static-obstacle-count, not both"
+        )
     return args
 
 
@@ -168,8 +187,19 @@ def apply_safety_shield(agent_pos, obstacle_pos, agent_distance,
 def export_case(args, agent_count, speed_ratio, output):
     cfg = Config()
     # Keep the controller tuning identical to swarm_demo.py.  This experiment
-    # changes the obstacle geometry and motion, not the controller itself.
-    obstacle_speed = args.obstacle_speed_min * speed_ratio
+    # changes the obstacle geometry and motion.  Static objects use a shorter
+    # response range because their zero velocity makes them fully predictable.
+    stationary_obstacle = (
+        args.stationary_obstacle or args.static_obstacle_count is not None
+    )
+    static_obstacle_count = (
+        args.static_obstacle_count
+        if args.static_obstacle_count is not None
+        else 2
+    )
+    if stationary_obstacle:
+        cfg.obstacle_margin = 2.0
+    obstacle_speed = 0.0 if stationary_obstacle else args.obstacle_speed_min * speed_ratio
 
     case_seed = args.seed + 1009 * agent_count + int(round(100 * speed_ratio))
     rng = np.random.default_rng(case_seed)
@@ -179,7 +209,7 @@ def export_case(args, agent_count, speed_ratio, output):
     speed = np.full(agent_count, cfg.v0)
     controller = CognitiveSwarm(agent_count, cfg)
 
-    obstacle_count = 2
+    obstacle_count = static_obstacle_count if stationary_obstacle else 2
     obs_pos = np.zeros((obstacle_count, 2))
     obs_vel = np.zeros((obstacle_count, 2))
     obs_heading = np.zeros(obstacle_count)
@@ -190,7 +220,9 @@ def export_case(args, agent_count, speed_ratio, output):
     # visible clearance buffer.  The safety shield uses the same envelope;
     # consequently it cannot permit a visually ambiguous near-touch.
     body_diameter = np.hypot(cfg.agent_length, cfg.agent_width)
-    visible_obstacle_clearance = 2.0
+    # Roughly 0.75 body widths of free space between circumscribed envelopes:
+    # enough to look natural while remaining visibly and numerically safe.
+    visible_obstacle_clearance = 0.40
     obs_radius = np.full(
         obstacle_count, body_diameter + visible_obstacle_clearance
     )
@@ -201,30 +233,62 @@ def export_case(args, agent_count, speed_ratio, output):
     formation_height = np.ptp(pos[:, 1])
     half_width = max(43.0, 0.5 * formation_width + 22.0)
     half_height = max(28.0, 0.5 * formation_height + 19.0)
-    orbit_x = min(0.62 * half_width, 0.5 * formation_width + 10.0)
-    orbit_y = min(0.60 * half_height, 0.5 * formation_height + 8.0)
     centre0 = pos.mean(axis=0)
-    phase = np.array([-0.8, 0.7])
-    obs_pos[0] = centre0 + np.array([
-        orbit_x * np.sin(phase[0]),
-        0.55 * orbit_y * np.sin(2.0 * phase[0]),
-    ])
-    obs_pos[1] = centre0 + np.array([
-        orbit_x * np.sin(phase[1]),
-        0.55 * orbit_y * np.sin(2.0 * phase[1] + 0.5 * np.pi),
-    ])
-    for index, phase_direction in enumerate((1.0, -1.0)):
-        tangent = phase_direction * np.array([
-            orbit_x * np.cos(phase[index]),
-            1.1 * orbit_y * np.cos(
-                2.0 * phase[index] + 0.5 * np.pi * index
-            ),
+    formation_x_extent = max(
+        centre0[0] - pos[:, 0].min(),
+        pos[:, 0].max() - centre0[0],
+    )
+    orbit_x = max(
+        min(0.62 * half_width, 0.5 * formation_width + 10.0),
+        formation_x_extent + hard_obstacle_distance + 1.0,
+    )
+    orbit_y = min(0.60 * half_height, 0.5 * formation_height + 8.0)
+    if stationary_obstacle:
+        phase = np.zeros(obstacle_count)
+        # Stagger the fixed obstacles in world coordinates.  Their lateral
+        # offsets keep them close to (and partly inside) the flock corridor,
+        # while leaving a natural route around each vehicle.
+        forward_edge = pos[:, 0].max()
+        lateral_offset = max(2.8, min(5.5, 0.18 * formation_height))
+        if obstacle_count == 1:
+            obs_pos[0] = [forward_edge + 14.0, centre0[1]]
+        elif obstacle_count == 2:
+            obs_pos[:] = np.array([
+                [forward_edge + 10.0, centre0[1] + lateral_offset],
+                [forward_edge + 24.0, centre0[1] - lateral_offset],
+            ])
+    else:
+        # Start on opposite sides beyond the full formation envelope.
+        # Subsequent orbital motion may enter the flock, but no run begins
+        # with an obstacle interspersed among the agents.
+        phase = np.array([-0.5 * np.pi, 0.5 * np.pi])
+        obs_pos[0] = centre0 + np.array([
+            orbit_x * np.sin(phase[0]),
+            0.55 * orbit_y * np.sin(2.0 * phase[0]),
         ])
-        tangent /= np.linalg.norm(tangent)
-        initial_velocity = np.array([cfg.v0, 0.0]) + obstacle_speed * tangent
-        obs_speed[index] = np.linalg.norm(initial_velocity)
-        obs_heading[index] = np.arctan2(initial_velocity[1], initial_velocity[0])
-        obs_vel[index] = initial_velocity
+        obs_pos[1] = centre0 + np.array([
+            orbit_x * np.sin(phase[1]),
+            0.55 * orbit_y * np.sin(2.0 * phase[1] + 0.5 * np.pi),
+        ])
+        if (
+            obs_pos[0, 0] > pos[:, 0].min() - hard_obstacle_distance
+            or obs_pos[1, 0] < pos[:, 0].max() + hard_obstacle_distance
+        ):
+            raise RuntimeError("obstacles must initialize outside the formation")
+        for index, phase_direction in enumerate((1.0, -1.0)):
+            tangent = phase_direction * np.array([
+                orbit_x * np.cos(phase[index]),
+                1.1 * orbit_y * np.cos(
+                    2.0 * phase[index] + 0.5 * np.pi * index
+                ),
+            ])
+            tangent /= np.linalg.norm(tangent)
+            initial_velocity = np.array([cfg.v0, 0.0]) + obstacle_speed * tangent
+            obs_speed[index] = np.linalg.norm(initial_velocity)
+            obs_heading[index] = np.arctan2(
+                initial_velocity[1], initial_velocity[0]
+            )
+            obs_vel[index] = initial_velocity
     previous_centre = centre0.copy()
 
     fig, ax = plt.subplots(figsize=(10.4, 6.4))
@@ -233,10 +297,17 @@ def export_case(args, agent_count, speed_ratio, output):
     ax.grid(True, color="#d7ddd7", linewidth=0.55, alpha=0.75)
     ax.set_xlabel("global x")
     ax.set_ylabel("global y")
-    ax.set_title(
-        f"Centroid-driven obstacles | agents={agent_count} | relative speed "
-        f"{obstacle_speed:g} ({speed_ratio:g}x minimum)"
-    )
+    if stationary_obstacle:
+        obstacle_word = "obstacle" if obstacle_count == 1 else "obstacles"
+        ax.set_title(
+            f"{obstacle_count} stationary {obstacle_word} near path | "
+            f"agents={agent_count} | speed 0"
+        )
+    else:
+        ax.set_title(
+            f"Centroid-driven obstacles | agents={agent_count} | relative speed "
+            f"{obstacle_speed:g} ({speed_ratio:g}x minimum)"
+        )
 
     speed_norm = plt.Normalize(cfg.v_min, cfg.v_max)
     agents = PolyCollection(
@@ -259,11 +330,24 @@ def export_case(args, agent_count, speed_ratio, output):
         obstacle_rectangles.append(rectangle)
 
     status = ax.text(0.01, 0.99, "", transform=ax.transAxes, va="top", ha="left")
-    ax.legend(handles=[
+    legend_handles = [
         Patch(facecolor=plt.cm.Blues(0.65), edgecolor="#17365d", label="swarm agent"),
-        Patch(facecolor=obstacle_colours[0], edgecolor="black", label="obstacle 1"),
-        Patch(facecolor=obstacle_colours[1], edgecolor="black", label="obstacle 2"),
-    ], loc="lower right")
+    ]
+    if obstacle_count >= 1:
+        legend_handles.append(
+            Patch(
+                facecolor=obstacle_colours[0], edgecolor="black",
+                label="obstacle 1",
+            )
+        )
+    if obstacle_count == 2:
+        legend_handles.append(
+            Patch(
+                facecolor=obstacle_colours[1], edgecolor="black",
+                label="obstacle 2",
+            )
+        )
+    ax.legend(handles=legend_handles, loc="lower right")
 
     step_number = 0
     filtered_centroid_velocity = np.array([cfg.v0, 0.0])
@@ -294,44 +378,48 @@ def export_case(args, agent_count, speed_ratio, output):
         )
 
         old_obs_pos = obs_pos.copy()
-        angular_rate = obstacle_speed / max(orbit_x, orbit_y)
-        phase[:] += angular_rate * cfg.dt * np.array([1.0, -1.0])
-        for index in range(obstacle_count):
-            target_offset = np.array([
-                orbit_x * np.sin(phase[index]),
-                0.55 * orbit_y * np.sin(
-                    2.0 * phase[index] + 0.5 * np.pi * index
-                ),
-            ])
-            target = flock_centre + target_offset
-            delta = target - obs_pos[index]
-            direction = delta / (np.linalg.norm(delta) + 1e-12)
-            desired_velocity = (
-                filtered_centroid_velocity + obstacle_speed * direction
-            )
-            desired_heading = np.arctan2(
-                desired_velocity[1], desired_velocity[0]
-            )
-            heading_error = CognitiveSwarm.wrap(
-                desired_heading - obs_heading[index]
-            )
-            target_turn_rate = np.clip(heading_error / 0.8, -0.65, 0.65)
-            turn_ease = 1.0 - np.exp(-cfg.dt / 0.45)
-            obs_turn_rate[index] += turn_ease * (
-                target_turn_rate - obs_turn_rate[index]
-            )
-            obs_heading[index] = CognitiveSwarm.wrap(
-                obs_heading[index] + obs_turn_rate[index] * cfg.dt
-            )
-            target_speed = np.linalg.norm(desired_velocity)
-            speed_ease = 1.0 - np.exp(-cfg.dt / 0.6)
-            obs_speed[index] += speed_ease * (
-                target_speed - obs_speed[index]
-            )
-            obs_vel[index] = obs_speed[index] * np.array([
-                np.cos(obs_heading[index]), np.sin(obs_heading[index])
-            ])
-        proposed_obs_pos = old_obs_pos + obs_vel * cfg.dt
+        if stationary_obstacle:
+            obs_vel[:] = 0.0
+            proposed_obs_pos = old_obs_pos.copy()
+        else:
+            angular_rate = obstacle_speed / max(orbit_x, orbit_y)
+            phase[:] += angular_rate * cfg.dt * np.array([1.0, -1.0])
+            for index in range(obstacle_count):
+                target_offset = np.array([
+                    orbit_x * np.sin(phase[index]),
+                    0.55 * orbit_y * np.sin(
+                        2.0 * phase[index] + 0.5 * np.pi * index
+                    ),
+                ])
+                target = flock_centre + target_offset
+                delta = target - obs_pos[index]
+                direction = delta / (np.linalg.norm(delta) + 1e-12)
+                desired_velocity = (
+                    filtered_centroid_velocity + obstacle_speed * direction
+                )
+                desired_heading = np.arctan2(
+                    desired_velocity[1], desired_velocity[0]
+                )
+                heading_error = CognitiveSwarm.wrap(
+                    desired_heading - obs_heading[index]
+                )
+                target_turn_rate = np.clip(heading_error / 0.8, -0.65, 0.65)
+                turn_ease = 1.0 - np.exp(-cfg.dt / 0.45)
+                obs_turn_rate[index] += turn_ease * (
+                    target_turn_rate - obs_turn_rate[index]
+                )
+                obs_heading[index] = CognitiveSwarm.wrap(
+                    obs_heading[index] + obs_turn_rate[index] * cfg.dt
+                )
+                target_speed = np.linalg.norm(desired_velocity)
+                speed_ease = 1.0 - np.exp(-cfg.dt / 0.6)
+                obs_speed[index] += speed_ease * (
+                    target_speed - obs_speed[index]
+                )
+                obs_vel[index] = obs_speed[index] * np.array([
+                    np.cos(obs_heading[index]), np.sin(obs_heading[index])
+                ])
+            proposed_obs_pos = old_obs_pos + obs_vel * cfg.dt
 
         output_commands = controller.commands(
             pos, heading, speed, old_obs_pos, obs_vel, obs_radius,
@@ -373,9 +461,13 @@ def export_case(args, agent_count, speed_ratio, output):
         centre_marker.set_offsets(pos.mean(axis=0).reshape(1, 2))
         update_view_and_obstacles()
 
-        obstacle_clearance = np.min(
-            np.linalg.norm(pos[:, None, :] - obs_pos[None, :, :], axis=2)
-            - body_diameter
+        obstacle_clearance = (
+            np.min(
+                np.linalg.norm(
+                    pos[:, None, :] - obs_pos[None, :, :], axis=2
+                ) - body_diameter
+            )
+            if obstacle_count else np.inf
         )
         pair_distance = np.linalg.norm(
             pos[:, None, :] - pos[None, :, :], axis=2
@@ -390,10 +482,17 @@ def export_case(args, agent_count, speed_ratio, output):
         )
         if agent_clearance < -1e-7 or obstacle_clearance < -1e-7:
             raise RuntimeError("geometric safety shield failed")
+        obstacle_status = (
+            f"stationary obstacles = {obstacle_count}; speed = 0"
+            if stationary_obstacle
+            else (
+                f"obstacle relative speed = {obstacle_speed:g} "
+                f"({speed_ratio:g}x minimum)"
+            )
+        )
         status.set_text(
             f"step = {step_number}/{args.steps}   agents = {agent_count}\n"
-            f"obstacle relative speed = {obstacle_speed:g} "
-            f"({speed_ratio:g}x minimum)\n"
+            f"{obstacle_status}\n"
             f"agent speed mean/min/max = {speed.mean():.2f} / "
             f"{speed.min():.2f} / {speed.max():.2f}\n"
             f"body clearance now = {agent_clearance:.2f} agent / "
@@ -408,10 +507,17 @@ def export_case(args, agent_count, speed_ratio, output):
     def init_animation():
         """Draw the initial state without consuming a simulation step."""
         centre_marker.set_offsets(pos.mean(axis=0).reshape(1, 2))
+        obstacle_status = (
+            f"stationary obstacles = {obstacle_count}; speed = 0"
+            if stationary_obstacle
+            else (
+                f"obstacle relative speed = {obstacle_speed:g} "
+                f"({speed_ratio:g}x minimum)"
+            )
+        )
         status.set_text(
             f"step = 0/{args.steps}   agents = {agent_count}\n"
-            f"obstacle relative speed = {obstacle_speed:g} "
-            f"({speed_ratio:g}x minimum)"
+            f"{obstacle_status}"
         )
         return [agents, centre_marker, status, *obstacle_rectangles]
 
@@ -425,7 +531,11 @@ def export_case(args, agent_count, speed_ratio, output):
     writer = FFMpegWriter(
         fps=args.fps,
         metadata={
-            "title": "Cognitive swarm with random moving obstacles",
+            "title": (
+                f"Cognitive swarm with {obstacle_count} stationary obstacles"
+                if stationary_obstacle
+                else "Cognitive swarm with random moving obstacles"
+            ),
             "comment": (
                 f"agents={agent_count}; steps={args.steps}; "
                 f"relative_obstacle_speed={obstacle_speed:g}"
@@ -454,13 +564,35 @@ def main(argv=None):
         raise RuntimeError("MP4 export requires FFmpeg")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     for agent_count in args.agents:
-        for speed_ratio in args.speed_ratios:
+        stationary_obstacle = (
+            args.stationary_obstacle or args.static_obstacle_count is not None
+        )
+        static_obstacle_count = (
+            args.static_obstacle_count
+            if args.static_obstacle_count is not None
+            else 2
+        )
+        speed_ratios = (0.0,) if stationary_obstacle else args.speed_ratios
+        for speed_ratio in speed_ratios:
             obstacle_speed = args.obstacle_speed_min * speed_ratio
-            filename = (
-                f"random_obstacles_agents_{agent_count}_speed_"
-                f"{obstacle_speed:g}_{ratio_label(speed_ratio)}_minimum_"
-                f"{args.steps}_steps.mp4"
-            )
+            if stationary_obstacle:
+                if static_obstacle_count == 2:
+                    prefix = "two_static_obstacles"
+                else:
+                    obstacle_word = (
+                        "obstacle" if static_obstacle_count == 1 else "obstacles"
+                    )
+                    prefix = f"{static_obstacle_count}_static_{obstacle_word}"
+                filename = (
+                    f"{prefix}_agents_{agent_count}_speed_0_"
+                    f"{args.steps}_steps.mp4"
+                )
+            else:
+                filename = (
+                    f"random_obstacles_agents_{agent_count}_speed_"
+                    f"{obstacle_speed:g}_{ratio_label(speed_ratio)}_minimum_"
+                    f"{args.steps}_steps.mp4"
+                )
             export_case(
                 args, agent_count, speed_ratio, args.output_dir / filename
             )
