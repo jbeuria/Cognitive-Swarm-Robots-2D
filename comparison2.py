@@ -540,8 +540,17 @@ def export_present_recovery_video(
     obs_radius = np.full(2, body_diameter + visible_obstacle_clearance)
     hard_agent_distance = body_diameter + 0.18
     hard_obstacle_distance = body_diameter + visible_obstacle_clearance
-    minimum_agent_clearance = np.inf
-    minimum_obstacle_clearance = np.inf
+    initial_pair_distance = np.linalg.norm(
+        x[:, None, :] - x[None, :, :], axis=2
+    )
+    np.fill_diagonal(initial_pair_distance, np.inf)
+    minimum_agent_clearance = float(
+        initial_pair_distance.min() - body_diameter
+    )
+    minimum_obstacle_clearance = float(np.min(
+        np.linalg.norm(x[:, None, :] - obs_x[None, :, :], axis=2)
+        - body_diameter
+    ))
     minimum_polarization = 1.0
 
     fig, ax = plt.subplots(figsize=(10.4, 6.4))
@@ -611,6 +620,13 @@ def export_present_recovery_video(
     )
 
     step_number = 0
+    pre_encounter_spans = []
+    recovery_baseline_span = None
+    recovery_samples = []
+    recovery_burden = 0.0
+    encounter_started = False
+    recovery_dwell_count = 0
+    recovery_complete = False
 
     def update_view():
         centre = x.mean(axis=0)
@@ -636,6 +652,8 @@ def export_present_recovery_video(
         nonlocal x, heading, speed, obs_x, step_number, peak_radius
         nonlocal minimum_agent_clearance, minimum_obstacle_clearance
         nonlocal minimum_polarization
+        nonlocal recovery_baseline_span, recovery_burden, encounter_started
+        nonlocal recovery_dwell_count, recovery_complete
 
         step_number += 1
         old_x = x.copy()
@@ -684,6 +702,54 @@ def export_present_recovery_video(
         compactness = 100.0 * baseline_radius / max(radius, 1e-12)
         polarization = float(np.linalg.norm(heading.mean(axis=0)))
         minimum_polarization = min(minimum_polarization, polarization)
+        span_x = float(np.ptp(x[:, 0]))
+        phase = current_phase(centre)
+
+        # Use the median longitudinal span from the final 0.75 seconds before
+        # avoidance as the recovery reference.  For a live animation, B_rec is
+        # a recent 1-second burden rather than a lifetime cumulative integral:
+        # it rises during disruption, decays after the obstacles have passed,
+        # and resets after 0.4 seconds of recovered heading coherence.
+        if not encounter_started and phase == "approach":
+            pre_encounter_spans.append(span_x)
+        elif not encounter_started:
+            history_steps = max(1, int(0.75 / c.dt))
+            reference = pre_encounter_spans[-history_steps:]
+            recovery_baseline_span = float(
+                np.median(reference) if reference else span_x
+            )
+            encounter_started = True
+
+        if encounter_started and not recovery_complete:
+            normalized_deformation = abs(
+                span_x / recovery_baseline_span - 1.0
+            )
+            sample = (
+                normalized_deformation * c.dt
+                if phase != "post-obstacle self-healing"
+                else 0.0
+            )
+            recovery_samples.append(sample)
+            window_steps = max(1, int(1.0 / c.dt))
+            if len(recovery_samples) > window_steps:
+                del recovery_samples[:-window_steps]
+            recovery_burden = float(np.sum(recovery_samples))
+
+            if (
+                phase == "post-obstacle self-healing"
+                and polarization >= 0.99
+            ):
+                recovery_dwell_count += 1
+            else:
+                recovery_dwell_count = 0
+
+            dwell_steps = max(1, int(0.40 / c.dt))
+            if recovery_dwell_count >= dwell_steps:
+                recovery_complete = True
+                recovery_samples.clear()
+                recovery_burden = 0.0
+
+        display_phase = "recovered" if recovery_complete else phase
 
         pair_distance = np.linalg.norm(
             x[:, None, :] - x[None, :, :], axis=2
@@ -709,18 +775,13 @@ def export_present_recovery_video(
         update_view()
 
         status.set_text(
-            f"step = {step_number}/{steps}   phase = {current_phase(centre)}\n"
-            f"obstacle speed = {obstacle_speed_ratio:g}x nominal\n"
-            f"agent speed mean/min/max = {speed.mean():.2f} / "
-            f"{speed.min():.2f} / {speed.max():.2f}\n"
-            f"heading coherence = {polarization:.3f} "
-            f"(run minimum {minimum_polarization:.3f})\n"
-            f"flock RMS radius = {radius:.2f}   compactness vs start = "
-            f"{compactness:.1f}%\n"
-            f"clearance now = {agent_clearance:.2f} agent / "
-            f"{obstacle_clearance:.2f} obstacle\n"
-            f"run minima = {minimum_agent_clearance:.2f} / "
-            f"{minimum_obstacle_clearance:.2f}"
+            f"step = {step_number}/{steps}   "
+            f"t = {step_number * c.dt:.2f} s   phase = {display_phase}\n"
+            f"minimum obstacle clearance, $d_{{\\min}}^{{\\mathrm{{obs}}}}$ = "
+            f"{minimum_obstacle_clearance:.2f}\n"
+            f"recovery burden, $B_{{\\mathrm{{rec}}}}$ (recent 1 s) = "
+            f"{recovery_burden:.3f} s\n"
+            f"heading coherence, P = {polarization:.3f}"
         )
         return [
             agents, centre_marker, status, *obstacle_rectangles
@@ -731,10 +792,11 @@ def export_present_recovery_video(
     def init_animation():
         centre_marker.set_offsets(centre0.reshape(1, 2))
         status.set_text(
-            f"step = 0/{steps}   phase = approach\n"
-            f"obstacle speed = {obstacle_speed_ratio:g}x nominal\n"
-            f"flock RMS radius = {baseline_radius:.2f}   "
-            "compactness vs start = 100.0%"
+            f"step = 0/{steps}   t = 0.00 s   phase = approach\n"
+            f"minimum obstacle clearance, $d_{{\\min}}^{{\\mathrm{{obs}}}}$ = "
+            f"{minimum_obstacle_clearance:.2f}\n"
+            "recovery burden, $B_{\\mathrm{rec}}$ (recent 1 s) = 0.000 s\n"
+            "heading coherence, P = 1.000"
         )
         return [
             agents, centre_marker, status, *obstacle_rectangles
