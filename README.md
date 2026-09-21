@@ -2,6 +2,14 @@
 
 A self-contained cognitive-swarm controller with a real-time 2-D verifier and a ROS 2/Gazebo-ready control node. The verifier models predictive agent separation, moving-obstacle avoidance, bounded turning, evasive braking, and acceleration to rejoin the flock.
 
+## Featured self-healing simulation
+
+[![Play the N=30, 1x-obstacle-speed self-healing simulation](assets/present_controller_recovery_N30_speed_1x_preview.png)](https://raw.githubusercontent.com/jbeuria/Cognitive-Swarm-Robots-2D/main/Self-healing%20videos/speed_1x/present_controller_recovery_N30_speed_1x_1000_steps.mp4)
+
+[▶ Play `present_controller_recovery_N30_speed_1x_1000_steps.mp4`](https://raw.githubusercontent.com/jbeuria/Cognitive-Swarm-Robots-2D/main/Self-healing%20videos/speed_1x/present_controller_recovery_N30_speed_1x_1000_steps.mp4)
+
+This 40-second, 1,000-step run shows a close 1x-speed obstacle encounter, temporary flock disruption, and subsequent rejoining for `N = 30`. The linked MP4 is stored in this repository; the preview image is used because GitHub README files do not support a portable inline HTML video player.
+
 ## Research backbone and citation
 
 This repository builds on the theoretical and computational framework developed in the following articles:
@@ -434,169 +442,149 @@ Live mode keeps an explicit reference to the Matplotlib `FuncAnimation` object w
 
 ### Animation and benchmark diagnostics
 
-The repository contains several video families, and some use different physical obstacle sizes. The definitions below should therefore be used when interpreting an overlay or comparing exported results. In all formulas, $k$ is the displayed simulation step, $\Delta t=0.04\,\mathrm{s}$, and
-```math
-t_k=k\Delta t.
+The repository contains several video families, and some use different physical obstacle sizes. The definitions below must therefore be used when interpreting an overlay or comparing exported results. This section deliberately uses plain-text equations so it renders in GitHub, IDE previews, and Markdown viewers without extended math support.
+
+In the equations below, `k` is the displayed simulation step and `dt = 0.04 s`:
+
+```text
+t[k] = k * dt
 ```
-Thus a 1,000-step video represents $40\,\mathrm{s}$ of simulated time. The displayed step is the number of completed controller/plant updates; the initial frame is step $0$ at $t=0$.
+
+A 1,000-step video therefore represents 40 seconds of simulated time. The initial frame is step 0 at `t = 0`; the displayed step is the number of completed controller/plant updates.
 
 #### Vehicle geometry and the two clearance conventions
 
-For the equal-sized agent and obstacle glyphs used by `swarm_demo_random_obstacles.py` and the self-healing videos from `comparison2.py`, let
-```math
-D_{\mathrm{body}}=\sqrt{L_{\mathrm{agent}}^2+W_{\mathrm{agent}}^2}.
+For the equal-sized agent and obstacle glyphs used by `swarm_demo_random_obstacles.py` and the self-healing videos from `comparison2.py`, define:
+
+```text
+D_body = sqrt(L_agent^2 + W_agent^2)
 ```
-This is the sum of the two circumradii of a pair of identical rectangular bodies. With the current $L_{\mathrm{agent}}=0.95$ and $W_{\mathrm{agent}}=0.50$,
-```math
-D_{\mathrm{body}}\simeq1.0735.
+
+`D_body` is the sum of the two circumradii of a pair of identical rectangular bodies. With `L_agent = 0.95` and `W_agent = 0.50`, `D_body` is approximately `1.0735`. The conservative visible body clearances at step `k` are:
+
+```text
+d_agent_body[k] = min over i < j of (norm(x_i[k] - x_j[k]) - D_body)
+
+d_obstacle_body[k] = min over agents i and obstacles a of
+                     (norm(x_i[k] - o_a[k]) - D_body)
 ```
-The conservative visible body clearances at step $k$ are
-```math
-d_{\mathrm{body}}^{\mathrm{agent}}(k)
-=
-\min_{i<j}\|\mathbf{x}_i(k)-\mathbf{x}_j(k)\|-D_{\mathrm{body}},
-```
-and
-```math
-d_{\mathrm{body}}^{\mathrm{obs}}(k)
-=
-\min_{i,a}\|\mathbf{x}_i(k)-\mathbf{o}_a(k)\|-D_{\mathrm{body}}.
-```
+
 A positive value means that the conservative circumscribed bodies are separated, zero means tangency, and a negative value means overlap. The geometric shield in these video exporters enforces a visible obstacle buffer
-```math
-d_{\mathrm{body}}^{\mathrm{obs}}\ge0.40
+
+```text
+d_obstacle_body >= 0.40
 ```
-up to numerical projection tolerance. The agent-agent shield similarly enforces a $0.18$ body-clearance buffer. These are animation-plant safety projections; the cognitive controller remains the nominal source of motion commands.
+
+up to numerical projection tolerance. The agent-agent shield similarly enforces a `0.18` body-clearance buffer. These are animation-plant safety projections; the cognitive controller remains the nominal source of motion commands.
 
 The main `swarm_demo.py` and the quantitative safety benchmark use a controller-envelope clearance instead:
-```math
-d_{\mathrm{env}}^{\mathrm{obs}}(k)
-=
-\min_{i,a}
-\left(\|\mathbf{x}_i(k)-\mathbf{o}_a(k)\|-\rho_a\right),
+
+```text
+d_obstacle_envelope[k] = min over agents i and obstacles a of
+                         (norm(x_i[k] - o_a[k]) - rho_a)
 ```
-where $\rho_a$ is the conservative obstacle radius supplied to the point-agent controller. This quantity is appropriate for controller-level safety comparisons, but it is not numerically interchangeable with the equal-body clearance above. Whenever a result is reported, the chosen convention must be stated.
+
+Here `rho_a` is the conservative obstacle radius supplied to the point-agent controller. This quantity is appropriate for controller-level safety comparisons, but it is not numerically interchangeable with the equal-body clearance above. Whenever a result is reported, the chosen convention must be stated.
 
 #### Running minimum obstacle clearance
 
-The self-healing animation displays the running minimum body clearance
-```math
-\boxed{
-d_{\min}^{\mathrm{obs}}(k)
-=
-\min_{0\le \ell\le k}
-d_{\mathrm{body}}^{\mathrm{obs}}(\ell).
-}
-```
-It can decrease when a closer encounter occurs and remains at the worst value after the obstacles have passed. It does not reset during a run. The `comparison2.py` publication benchmark uses the same running-minimum operation but applies it to $d_{\mathrm{env}}^{\mathrm{obs}}$ rather than the equal-body clearance.
+The self-healing animation displays the running minimum body clearance:
 
-The earlier zero-, single-, and two-obstacle exports label `body clearance now` using the instantaneous $d_{\mathrm{body}}^{\mathrm{agent}}(k)$ and $d_{\mathrm{body}}^{\mathrm{obs}}(k)$. Their `run minima` are
-```math
-\min_{0\le\ell\le k}d_{\mathrm{body}}^{\mathrm{agent}}(\ell),
-\qquad
-\min_{0\le\ell\le k}d_{\mathrm{body}}^{\mathrm{obs}}(\ell).
+```text
+d_obs_min[k] = min over steps q from 0 through k of d_obstacle_body[q]
 ```
-With zero obstacles, obstacle clearance is mathematically undefined; the exporter stores $+\infty$ as a sentinel and no obstacle-safety conclusion should be drawn from that entry.
+
+This is the overlay quantity labelled `d_min^obs`. It can decrease when a closer encounter occurs and remains at the worst value after the obstacles have passed. It does not reset during a run. The `comparison2.py` publication benchmark uses the same running-minimum operation but applies it to `d_obstacle_envelope` rather than `d_obstacle_body`.
+
+The earlier zero-, single-, and two-obstacle exports label `body clearance now` using the instantaneous `d_agent_body[k]` and `d_obstacle_body[k]`. Their `run minima` are:
+
+```text
+min over steps q from 0 through k of d_agent_body[q]
+min over steps q from 0 through k of d_obstacle_body[q]
+```
+
+With zero obstacles, obstacle clearance is mathematically undefined. The exporter stores positive infinity as a sentinel; no obstacle-safety conclusion should be drawn from that entry.
 
 #### Heading coherence
 
-The additional live recovery indicator is the polarization, or heading coherence,
-```math
-\boxed{
-P(k)=
-\left\|
-\frac{1}{N}\sum_{i=1}^{N}\mathbf e_i(k)
-\right\|,
-\qquad 0\le P\le1.
-}
+The additional live recovery indicator is the polarization, or heading coherence:
+
+```text
+P[k] = norm((1 / N) * sum over agents i of e_i[k])
+0 <= P[k] <= 1
 ```
-$P=1$ means that all unit headings are identical. Smaller values indicate angular disagreement during avoidance or flock deformation. In the self-healing videos, recovered heading coherence requires
-```math
-P\ge0.99
-```
-for a dwell time of $0.40\,\mathrm{s}$, which is 10 consecutive steps.
+
+`P = 1` means that all unit headings are identical. Smaller values indicate angular disagreement during avoidance or flock deformation. In the self-healing videos, recovered heading coherence requires `P >= 0.99` for a dwell time of `0.40 s`, which is 10 consecutive steps.
 
 #### Live recovery burden in the self-healing videos
 
-Let the instantaneous longitudinal span be
-```math
-L_x(k)=\max_i x_i(k)-\min_i x_i(k).
+The instantaneous longitudinal span is:
+
+```text
+L_x[k] = max over agents i of x_i[k] - min over agents i of x_i[k]
 ```
-At the start of avoidance, the animation defines a pre-encounter reference $L_x^{\mathrm{base}}$ as the median of the available $L_x$ values over the final $0.75\,\mathrm{s}$ of the approach phase. Because an obstacle may either stretch or compress a compact flock, the instantaneous normalized deformation is
-```math
-\delta_L(k)=
-\left|
-\frac{L_x(k)}{L_x^{\mathrm{base}}}-1
-\right|.
+
+At the start of avoidance, the animation defines `L_x_base` as the median of the available `L_x` values over the final `0.75 s` of the approach phase. Because an obstacle may either stretch or compress a compact flock, the instantaneous normalized deformation is:
+
+```text
+delta_L[k] = abs(L_x[k] / L_x_base - 1)
 ```
-For a live, interpretable recovery indicator, the animation uses a one-second recent burden rather than a lifetime cumulative integral. Define
-```math
-b_k=
-\begin{cases}
-\delta_L(k)\Delta t, & \text{during approach/avoidance after the encounter begins},\\
-0, & \text{after both obstacles have passed}.
-\end{cases}
+
+For a live, interpretable recovery indicator, the animation uses a one-second recent burden rather than a lifetime cumulative integral:
+
+```text
+b[k] = delta_L[k] * dt    while the encounter is active
+b[k] = 0                  after both obstacles have passed
 ```
-With $W=1\,\mathrm{s}/\Delta t=25$ steps, the displayed value is
-```math
-\boxed{
-B_{\mathrm{rec}}^{\mathrm{live}}(k)
-=
-\sum_{\ell=\max(0,k-W+1)}^k b_\ell.
-}
+
+The one-second window contains `W = 1 s / dt = 25` steps. The displayed value is:
+
+```text
+B_rec_live[k] = sum of b[q] for q = max(0, k - W + 1), ..., k
 ```
-It has units of seconds. It rises while recent frames contain obstacle-induced deformation, decays as those samples leave the one-second window, and is explicitly reset to zero when $P\ge0.99$ has persisted for $0.40\,\mathrm{s}$ after both obstacles have passed. The animation phase is then shown as `recovered`. This resetting definition is intended only as a live animation diagnostic.
+
+`B_rec_live` has units of seconds. It rises while recent frames contain obstacle-induced deformation, decays as those samples leave the one-second window, and is explicitly reset to zero when `P >= 0.99` has persisted for `0.40 s` after both obstacles have passed. The animation phase is then shown as `recovered`. This resetting definition is intended only as a live animation diagnostic.
 
 #### Cumulative recovery burden in the quantitative benchmark
 
-The publication benchmark in `comparison2.py` uses a different, non-resetting scalar because it compares the complete cost of a standardized backward-displacement perturbation. Its pre-perturbation baseline is the median longitudinal span over the final $0.75\,\mathrm{s}$ before the perturbation, and
-```math
-b_k^{\mathrm{bench}}
-=
-\max\left(
-\frac{L_x(k)}{L_x^{\mathrm{base}}}-1,
-0
-\right).
+The publication benchmark in `comparison2.py` uses a different, non-resetting scalar because it compares the complete cost of a standardized backward-displacement perturbation. Its pre-perturbation baseline is the median longitudinal span over the final `0.75 s` before the perturbation:
+
+```text
+b_bench[k] = max(L_x[k] / L_x_base - 1, 0)
 ```
-The reported benchmark burden is
-```math
-\boxed{
-B_{\mathrm{rec}}^{\mathrm{bench}}
-=
-\sum_{k=k_p}^{K}
-b_k^{\mathrm{bench}}\Delta t,
-}
+
+The reported benchmark burden is:
+
+```text
+B_rec_bench = sum of (b_bench[k] * dt) for k = perturbation step, ..., final step
 ```
-where $k_p$ is the perturbation step and $K$ is the end of the recovery experiment. It also has units of seconds, but it never decreases or resets. Lower values mean that excess longitudinal spread was smaller and/or shorter-lived. Consequently, $B_{\mathrm{rec}}^{\mathrm{live}}$ from an animation must not be compared numerically with $B_{\mathrm{rec}}^{\mathrm{bench}}$ in `benchmark_results.csv`.
+
+`B_rec_bench` has units of seconds, but it never decreases or resets. Lower values mean that excess longitudinal spread was smaller and/or shorter-lived. Consequently, `B_rec_live` from an animation must not be compared numerically with `B_rec_bench` in `benchmark_results.csv`.
 
 #### Other metrics appearing in current or earlier MP4 overlays
 
 The remaining overlay quantities are defined as follows:
 
-- `speed mean/min/max` are $N^{-1}\sum_i v_i(k)$, $\min_i v_i(k)$, and $\max_i v_i(k)$.
-- `span x/y` are $\max_i x_i-\min_i x_i$ and $\max_i y_i-\min_i y_i$.
-- The flock RMS radius is
-  ```math
-  R_{\mathrm{rms}}(k)=
-  \sqrt{\frac1N\sum_i\|\mathbf{x}_i(k)-\bar{\mathbf{x}}(k)\|^2}.
-  ```
-  If an older export shows `compactness vs start`, it is $100R_{\mathrm{rms}}(0)/R_{\mathrm{rms}}(k)$ percent; values above $100\%$ mean a smaller RMS radius than at initialization.
-- `components` is the number of connected components of the undirected proximity graph with edges $\|\mathbf{x}_i-\mathbf{x}_j\|<R$, where $R$ is the sensing radius. A return to one component indicates topological rejoining, but does not by itself guarantee restored headings or shape.
-- `min agent gap` in `swarm_demo.py` is the minimum centre-to-centre distance $\min_{i<j}\|\mathbf{x}_i-\mathbf{x}_j\|$; unlike `body clearance`, it does not subtract a body diameter.
-- `mean rejoin rho` and `mean manoeuvre mu` are $N^{-1}\sum_i\rho_i$ and $N^{-1}\sum_i\mu_i$, using the rejoining and manoeuvre demands defined in the speed-control section above.
-- In the self-healing filenames and titles, obstacle speed `0x` means stationary. For `1x` and `2x`, each oncoming obstacle has world speed $\|\mathbf u_a\|=v_0$ and $2v_0$, respectively. The obstacle-speed multiplier in the centroid-driven random-obstacle exporter instead scales its configured centroid-relative target speed and should not be interpreted as the same world-speed ratio.
+- `speed mean/min/max`: the arithmetic mean, minimum, and maximum of all agent speeds at step `k`.
+- `span x/y`: `max(x_i) - min(x_i)` and `max(y_i) - min(y_i)` over all agents.
+- `R_rms`: `sqrt((1 / N) * sum(norm(x_i - x_bar)^2))`, where `x_bar` is the flock centroid.
+- `compactness vs start`: `100 * R_rms[0] / R_rms[k]` percent. Values above 100 percent mean a smaller RMS radius than at initialization.
+- `components`: the number of connected components in the undirected proximity graph whose edges satisfy `norm(x_i - x_j) < R`, where `R` is the sensing radius. Returning to one component indicates topological rejoining, but does not alone guarantee restored headings or shape.
+- `min agent gap`: the minimum centre-to-centre distance between two agents. Unlike `body clearance`, it does not subtract a body diameter.
+- `mean rejoin rho` and `mean manoeuvre mu`: the arithmetic means of the per-agent rejoining and manoeuvre demands defined in the speed-control section above.
+- Obstacle speed `0x` means stationary. In the self-healing `1x` and `2x` videos, each oncoming obstacle has world speed `v0` and `2 * v0`, respectively. The multiplier in the centroid-driven random-obstacle exporter instead scales its configured centroid-relative target speed and must not be interpreted as the same world-speed ratio.
 
 The generated video sets are organized as follows:
 
 | Location | Contents | Primary overlay convention |
 |:--|:--|:--|
-| `Self-healing videos/` | present controller, $N=10,20,30$, stationary obstacles | $d_{\min}^{\mathrm{obs}}$, recent $B_{\mathrm{rec}}^{\mathrm{live}}$, $P$ |
-| `Self-healing videos/speed_1x/` | same sizes, oncoming obstacle speed $v_0$ | same live metrics |
-| `Self-healing videos/speed_2x/` | same sizes, oncoming obstacle speed $2v_0$ | same live metrics |
-| `zero_obstacle_videos/` | $N=50,100,200$, no obstacles | instantaneous body clearance and running minima |
-| `single_obstacle_videos/` | $N=50,100,200$, one stationary obstacle | instantaneous body clearance and running minima |
-| `two_obstacle_videos/` | $N=50,100,200$, stationary and moving two-obstacle cases | instantaneous body clearance and running minima |
-| `results/swarm.mp4` | asynchronous traffic from `swarm_demo.py` | controller-envelope clearance, graph components, spans, $\rho$, and $\mu$ |
+| `Self-healing videos/` | present controller, N = 10, 20, 30; stationary obstacles | `d_obs_min`, recent `B_rec_live`, `P` |
+| `Self-healing videos/speed_1x/` | same sizes; oncoming obstacle speed `v0` | same live metrics |
+| `Self-healing videos/speed_2x/` | same sizes; oncoming obstacle speed `2 * v0` | same live metrics |
+| `zero_obstacle_videos/` | N = 50, 100, 200; no obstacles | instantaneous body clearance and running minima |
+| `single_obstacle_videos/` | N = 50, 100, 200; one stationary obstacle | instantaneous body clearance and running minima |
+| `two_obstacle_videos/` | N = 50, 100, 200; stationary and moving two-obstacle cases | instantaneous body clearance and running minima |
+| `results/swarm.mp4` | asynchronous traffic from `swarm_demo.py` | controller-envelope clearance, graph components, spans, `rho`, `mu` |
 
 ### Unbounded longitudinal evolution and split–reformation diagnostic
 
