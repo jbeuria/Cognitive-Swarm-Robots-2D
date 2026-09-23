@@ -11,12 +11,17 @@ to the initial forward path with a realistic visible clearance buffer.
 """
 
 import argparse
+import os
 from pathlib import Path
+
+os.environ.setdefault("MPLBACKEND", "Agg")
 
 import matplotlib.pyplot as plt
 from matplotlib.animation import FFMpegWriter, FuncAnimation, writers
 from matplotlib.collections import PolyCollection
-from matplotlib.patches import Patch, Rectangle
+from matplotlib.lines import Line2D
+from matplotlib.patches import Rectangle
+from matplotlib.ticker import FuncFormatter, MultipleLocator
 from matplotlib.transforms import Affine2D
 import numpy as np
 
@@ -83,7 +88,7 @@ def parse_args(argv=None):
             "ratios are ignored"
         ),
     )
-    parser.add_argument("--fps", type=positive_int, default=25)
+    parser.add_argument("--fps", type=positive_int, default=15)
     parser.add_argument("--dpi", type=positive_int, default=100)
     parser.add_argument("--seed", type=int, default=2026)
     args = parser.parse_args(argv)
@@ -98,7 +103,8 @@ def make_formation(rng, count):
     """Create a compact near-square flock with safe initial spacing."""
     columns = int(np.ceil(np.sqrt(count)))
     rows = int(np.ceil(count / columns))
-    spacing = 3.0
+    # Scaled for the 32 m square: N=200 spans about 28 m rather than 42 m.
+    spacing = 2.0
     grid = []
     for row in range(rows):
         for column in range(columns):
@@ -186,6 +192,20 @@ def apply_safety_shield(agent_pos, obstacle_pos, agent_distance,
 
 def export_case(args, agent_count, speed_ratio, output):
     cfg = Config()
+    # Preserve the original geometry/spacing ratios inside the smaller scene.
+    spatial_scale = 2.0 / 3.0
+    for attribute in (
+        "sensing_radius",
+        "safe_agent_distance",
+        "obstacle_margin",
+        "rejoin_length",
+        "agent_length",
+        "agent_width",
+        "obstacle_length",
+        "obstacle_width",
+        "obstacle_radius",
+    ):
+        setattr(cfg, attribute, getattr(cfg, attribute) * spatial_scale)
     # Keep the controller tuning identical to swarm_demo.py.  This experiment
     # changes the obstacle geometry and motion.  Static objects use a shorter
     # response range because their zero velocity makes them fully predictable.
@@ -198,7 +218,7 @@ def export_case(args, agent_count, speed_ratio, output):
         else 2
     )
     if stationary_obstacle:
-        cfg.obstacle_margin = 2.0
+        cfg.obstacle_margin = 2.0 * spatial_scale
     obstacle_speed = 0.0 if stationary_obstacle else args.obstacle_speed_min * speed_ratio
 
     case_seed = args.seed + 1009 * agent_count + int(round(100 * speed_ratio))
@@ -222,40 +242,63 @@ def export_case(args, agent_count, speed_ratio, output):
     body_diameter = np.hypot(cfg.agent_length, cfg.agent_width)
     # Roughly 0.75 body widths of free space between circumscribed envelopes:
     # enough to look natural while remaining visibly and numerically safe.
-    visible_obstacle_clearance = 0.40
+    crowd_scale = np.clip((agent_count - 50) / 150.0, 0.0, 1.0)
+    visible_obstacle_clearance = (
+        0.40 + 0.30 * crowd_scale
+    ) * spatial_scale
     obs_radius = np.full(
         obstacle_count, body_diameter + visible_obstacle_clearance
     )
-    hard_agent_distance = body_diameter + 0.18
+    hard_agent_distance = body_diameter + (
+        0.18 + 0.22 * crowd_scale
+    ) * spatial_scale
     hard_obstacle_distance = body_diameter + visible_obstacle_clearance
 
     formation_width = np.ptp(pos[:, 0])
     formation_height = np.ptp(pos[:, 1])
-    half_width = max(43.0, 0.5 * formation_width + 22.0)
-    half_height = max(28.0, 0.5 * formation_height + 19.0)
+    half_width = 16.0
+    half_height = 16.0
     centre0 = pos.mean(axis=0)
     formation_x_extent = max(
         centre0[0] - pos[:, 0].min(),
         pos[:, 0].max() - centre0[0],
     )
     orbit_x = max(
-        min(0.62 * half_width, 0.5 * formation_width + 10.0),
-        formation_x_extent + hard_obstacle_distance + 1.0,
+        min(
+            0.62 * half_width,
+            0.5 * formation_width + 10.0 * spatial_scale,
+        ),
+        formation_x_extent + hard_obstacle_distance + 1.0 * spatial_scale,
     )
-    orbit_y = min(0.60 * half_height, 0.5 * formation_height + 8.0)
+    orbit_y = min(
+        0.60 * half_height,
+        0.5 * formation_height + 8.0 * spatial_scale,
+    )
     if stationary_obstacle:
         phase = np.zeros(obstacle_count)
         # Stagger the fixed obstacles in world coordinates.  Their lateral
         # offsets keep them close to (and partly inside) the flock corridor,
         # while leaving a natural route around each vehicle.
         forward_edge = pos[:, 0].max()
-        lateral_offset = max(2.8, min(5.5, 0.18 * formation_height))
+        lateral_offset = max(
+            2.8 * spatial_scale,
+            min(5.5 * spatial_scale, 0.18 * formation_height),
+        )
         if obstacle_count == 1:
-            obs_pos[0] = [forward_edge + 14.0, centre0[1]]
+            obs_pos[0] = [
+                forward_edge + 14.0 * spatial_scale,
+                centre0[1],
+            ]
         elif obstacle_count == 2:
             obs_pos[:] = np.array([
-                [forward_edge + 10.0, centre0[1] + lateral_offset],
-                [forward_edge + 24.0, centre0[1] - lateral_offset],
+                [
+                    forward_edge + 10.0 * spatial_scale,
+                    centre0[1] + lateral_offset,
+                ],
+                [
+                    forward_edge + 24.0 * spatial_scale,
+                    centre0[1] - lateral_offset,
+                ],
             ])
     else:
         # Start on opposite sides beyond the full formation envelope.
@@ -291,24 +334,33 @@ def export_case(args, agent_count, speed_ratio, output):
             obs_vel[index] = initial_velocity
     previous_centre = centre0.copy()
 
-    fig, ax = plt.subplots(figsize=(10.4, 6.4))
+    fig, ax = plt.subplots(
+        figsize=(640.0 / args.dpi, 540.0 / args.dpi),
+        facecolor="white",
+    )
     ax.set_aspect("equal")
-    ax.set_facecolor("#f7f8f4")
-    ax.grid(True, color="#d7ddd7", linewidth=0.55, alpha=0.75)
-    ax.set_xlabel("global x")
-    ax.set_ylabel("global y")
+    ax.set_facecolor("white")
+    # The camera contains 32 x 32 one-unit grid cells.  Label every alternate
+    # line on a doubled display scale, so both axes visibly span 64 units.
+    ax.xaxis.set_major_locator(MultipleLocator(2.0))
+    ax.yaxis.set_major_locator(MultipleLocator(2.0))
+    ax.xaxis.set_minor_locator(MultipleLocator(1.0))
+    ax.yaxis.set_minor_locator(MultipleLocator(1.0))
+    doubled_units = FuncFormatter(lambda value, _position: f"{2.0 * value:g}")
+    ax.xaxis.set_major_formatter(doubled_units)
+    ax.yaxis.set_major_formatter(doubled_units)
+    ax.grid(True, which="both", color="#686868", linewidth=0.45, alpha=0.72)
+    ax.set_axisbelow(True)
+    ax.set_xlabel("x", fontsize=24)
+    ax.set_ylabel("y", fontsize=24)
+    ax.tick_params(axis="both", which="major", labelsize=8)
     if stationary_obstacle:
-        obstacle_word = "obstacle" if obstacle_count == 1 else "obstacles"
-        ax.set_title(
-            f"{obstacle_count} stationary {obstacle_word} near path | "
-            f"agents={agent_count} | speed 0"
-        )
+        case_title = f"{obstacle_count} static obstacle"
+        if obstacle_count != 1:
+            case_title += "s"
     else:
-        ax.set_title(
-            f"Centroid-driven obstacles | agents={agent_count} | relative speed "
-            f"{obstacle_speed:g} ({speed_ratio:g}x minimum)"
-        )
-
+        case_title = f"moving obstacles, {speed_ratio:g}x speed"
+    ax.set_title(f"Cognitive swarm: {case_title} | N={agent_count}", fontsize=13)
     speed_norm = plt.Normalize(cfg.v_min, cfg.v_max)
     agents = PolyCollection(
         vehicle_polygons(pos, heading, cfg.agent_length, cfg.agent_width),
@@ -329,45 +381,64 @@ def export_case(args, agent_count, speed_ratio, output):
         ax.add_patch(rectangle)
         obstacle_rectangles.append(rectangle)
 
-    status = ax.text(0.01, 0.99, "", transform=ax.transAxes, va="top", ha="left")
-    legend_handles = [
-        Patch(facecolor=plt.cm.Blues(0.65), edgecolor="#17365d", label="swarm agent"),
+    metric_handles = [
+        Line2D([], [], linestyle="none", label="min/max speed: 0.00 / 0.00"),
+        Line2D([], [], linestyle="none", label="heading consensus: 1.000"),
+        Line2D([], [], linestyle="none", label=r"$B_{\mathrm{rec}}$: 0.000 s"),
     ]
-    if obstacle_count >= 1:
-        legend_handles.append(
-            Patch(
-                facecolor=obstacle_colours[0], edgecolor="black",
-                label="obstacle 1",
-            )
-        )
-    if obstacle_count == 2:
-        legend_handles.append(
-            Patch(
-                facecolor=obstacle_colours[1], edgecolor="black",
-                label="obstacle 2",
-            )
-        )
-    ax.legend(handles=legend_handles, loc="lower right")
+    metric_legend = ax.legend(
+        handles=metric_handles,
+        loc="upper right",
+        fontsize=11,
+        frameon=True,
+        framealpha=0.88,
+        facecolor="white",
+        edgecolor="none",
+        handlelength=0,
+        handletextpad=0,
+        borderpad=0.35,
+        labelspacing=0.3,
+    )
+    metric_texts = metric_legend.get_texts()
 
     step_number = 0
     filtered_centroid_velocity = np.array([cfg.v0, 0.0])
     minimum_agent_clearance = np.inf
     minimum_obstacle_clearance = np.inf
+    pre_encounter_spans = []
+    recovery_baseline_span = None
+    recovery_samples = []
+    recovery_burden = 0.0
+    encounter_started = False
+    recovery_dwell_count = 0
+    recovery_complete = False
 
     def update_view_and_obstacles():
         centre = pos.mean(axis=0)
-        ax.set_xlim(centre[0] - half_width, centre[0] + half_width)
-        ax.set_ylim(centre[1] - half_height, centre[1] + half_height)
+        ax.set_xlim(centre[0] - 16.0, centre[0] + 16.0)
+        ax.set_ylim(centre[1] - 16.0, centre[1] + 16.0)
         for index, rectangle in enumerate(obstacle_rectangles):
             angle = np.degrees(obs_heading[index])
             rectangle.set_transform(
                 Affine2D().rotate_deg(angle).translate(*obs_pos[index]) + ax.transData
             )
 
+    def current_phase(centre):
+        if obstacle_count == 0:
+            return "no obstacles"
+        relative_x = obs_pos[:, 0] - centre[0]
+        if np.any(np.abs(relative_x) <= 12.0):
+            return "avoidance"
+        if np.max(relative_x) > 12.0:
+            return "approach"
+        return "post-obstacle self-healing"
+
     def animate(_):
         nonlocal pos, heading, speed, step_number, previous_centre
         nonlocal filtered_centroid_velocity
         nonlocal minimum_agent_clearance, minimum_obstacle_clearance
+        nonlocal recovery_baseline_span, recovery_burden, encounter_started
+        nonlocal recovery_dwell_count, recovery_complete
         step_number += 1
         flock_centre = pos.mean(axis=0)
         centroid_velocity = (flock_centre - previous_centre) / cfg.dt
@@ -482,44 +553,80 @@ def export_case(args, agent_count, speed_ratio, output):
         )
         if agent_clearance < -1e-7 or obstacle_clearance < -1e-7:
             raise RuntimeError("geometric safety shield failed")
-        obstacle_status = (
-            f"stationary obstacles = {obstacle_count}; speed = 0"
-            if stationary_obstacle
-            else (
-                f"obstacle relative speed = {obstacle_speed:g} "
-                f"({speed_ratio:g}x minimum)"
+        heading_consensus = float(np.linalg.norm(heading.mean(axis=0)))
+        span_x = float(np.ptp(pos[:, 0]))
+        phase_name = current_phase(pos.mean(axis=0))
+
+        # Match comparison2.py: establish the reference before avoidance,
+        # accumulate only during the encounter, then feed zero samples after
+        # the obstacles pass so B_rec decays instead of increasing.
+        if recovery_complete and phase_name == "approach":
+            encounter_started = False
+            recovery_complete = False
+            pre_encounter_spans.clear()
+            recovery_samples.clear()
+            recovery_burden = 0.0
+            recovery_dwell_count = 0
+
+        if not encounter_started and phase_name == "approach":
+            pre_encounter_spans.append(span_x)
+        elif not encounter_started and phase_name == "avoidance":
+            history_steps = max(1, int(0.75 / cfg.dt))
+            reference = pre_encounter_spans[-history_steps:]
+            recovery_baseline_span = max(
+                float(np.median(reference) if reference else span_x),
+                1e-12,
             )
+            encounter_started = True
+
+        if encounter_started and not recovery_complete:
+            normalized_deformation = abs(
+                span_x / recovery_baseline_span - 1.0
+            )
+            sample = (
+                normalized_deformation * cfg.dt
+                if phase_name == "avoidance"
+                else 0.0
+            )
+            recovery_samples.append(sample)
+            window_steps = max(1, int(1.0 / cfg.dt))
+            if len(recovery_samples) > window_steps:
+                del recovery_samples[:-window_steps]
+            recovery_burden = float(np.sum(recovery_samples))
+
+            if (
+                phase_name == "post-obstacle self-healing"
+                and heading_consensus >= 0.99
+            ):
+                recovery_dwell_count += 1
+            else:
+                recovery_dwell_count = 0
+            if recovery_dwell_count >= max(1, int(0.40 / cfg.dt)):
+                recovery_complete = True
+                recovery_samples.clear()
+                recovery_burden = 0.0
+        metric_texts[0].set_text(
+            f"min/max speed: {speed.min():.2f} / {speed.max():.2f}"
         )
-        status.set_text(
-            f"step = {step_number}/{args.steps}   agents = {agent_count}\n"
-            f"{obstacle_status}\n"
-            f"agent speed mean/min/max = {speed.mean():.2f} / "
-            f"{speed.min():.2f} / {speed.max():.2f}\n"
-            f"body clearance now = {agent_clearance:.2f} agent / "
-            f"{obstacle_clearance:.2f} obstacle\n"
-            f"run minima = {minimum_agent_clearance:.2f} / "
-            f"{minimum_obstacle_clearance:.2f}"
+        metric_texts[1].set_text(
+            f"heading consensus: {heading_consensus:.3f}"
         )
-        return [agents, centre_marker, status, *obstacle_rectangles]
+        metric_texts[2].set_text(
+            rf"$B_{{\mathrm{{rec}}}}$: {recovery_burden:.3f} s"
+        )
+        return [agents, centre_marker, *metric_texts, *obstacle_rectangles]
 
     update_view_and_obstacles()
 
     def init_animation():
         """Draw the initial state without consuming a simulation step."""
         centre_marker.set_offsets(pos.mean(axis=0).reshape(1, 2))
-        obstacle_status = (
-            f"stationary obstacles = {obstacle_count}; speed = 0"
-            if stationary_obstacle
-            else (
-                f"obstacle relative speed = {obstacle_speed:g} "
-                f"({speed_ratio:g}x minimum)"
-            )
+        metric_texts[0].set_text(
+            f"min/max speed: {speed.min():.2f} / {speed.max():.2f}"
         )
-        status.set_text(
-            f"step = 0/{args.steps}   agents = {agent_count}\n"
-            f"{obstacle_status}"
-        )
-        return [agents, centre_marker, status, *obstacle_rectangles]
+        metric_texts[1].set_text("heading consensus: 1.000")
+        metric_texts[2].set_text(r"$B_{\mathrm{rec}}$: 0.000 s")
+        return [agents, centre_marker, *metric_texts, *obstacle_rectangles]
 
     animation = FuncAnimation(
         fig, animate, frames=range(args.steps), interval=int(cfg.dt * 1000),
@@ -541,7 +648,7 @@ def export_case(args, agent_count, speed_ratio, output):
                 f"relative_obstacle_speed={obstacle_speed:g}"
             ),
         },
-        bitrate=2200,
+        bitrate=900,
     )
     print(
         f"Exporting {output} ({agent_count} agents, {args.steps} steps, "

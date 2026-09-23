@@ -451,11 +451,11 @@ def _vehicle_polygons(centres, directions, length, width):
     return polygons
 
 
-def _compact_video_formation(rng, count):
+def _compact_video_formation(rng, count, spatial_scale=1.0):
     """Tight hexagonal packing just above the controller safety distance."""
     columns = int(np.ceil(np.sqrt(count)))
     rows = int(np.ceil(count / columns))
-    spacing = 2.50
+    spacing = 2.50 * spatial_scale
     row_spacing = 0.5 * np.sqrt(3.0) * spacing
     points = []
     for row in range(rows):
@@ -475,7 +475,7 @@ def export_present_recovery_video(
     agent_count,
     steps,
     output,
-    fps=25,
+    fps=15,
     dpi=100,
     seed=2026,
     obstacle_speed_ratio=0.0,
@@ -484,25 +484,42 @@ def export_present_recovery_video(
     import matplotlib.pyplot as plt
     from matplotlib.animation import FFMpegWriter, FuncAnimation
     from matplotlib.collections import PolyCollection
-    from matplotlib.patches import Patch, Rectangle
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Rectangle
+    from matplotlib.ticker import FuncFormatter, MultipleLocator
     from matplotlib.transforms import Affine2D
     from swarm_demo_random_obstacles import apply_safety_shield
 
     c = config_for("Present Controller")
+    # Fill most of the 32 m square while preserving the original ratios
+    # between formation spacing, vehicle bodies, and controller length scales.
+    spatial_scale = 1.40
+    for attribute in (
+        "sensing_radius",
+        "safe_agent_distance",
+        "obstacle_margin",
+        "rejoin_length",
+        "agent_length",
+        "agent_width",
+        "obstacle_length",
+        "obstacle_width",
+        "obstacle_radius",
+    ):
+        setattr(c, attribute, getattr(c, attribute) * spatial_scale)
     # Match the fixed-obstacle visualization configuration used by
     # swarm_demo_random_obstacles.py.  Static objects are fully predictable,
     # so the controller uses its shorter response range.
     stationary_obstacles = obstacle_speed_ratio == 0.0
     if stationary_obstacles:
-        c.obstacle_margin = 2.0
+        c.obstacle_margin = 2.0 * spatial_scale
     else:
         # For these small close-encounter visualizations, retain predictive
         # avoidance but use a compact response envelope.  The geometric shield
         # below still guarantees a clearly visible 0.4-unit body clearance.
-        c.obstacle_margin = 1.0
+        c.obstacle_margin = 1.0 * spatial_scale
     rng = np.random.default_rng(seed + 1009 * agent_count)
 
-    x = _compact_video_formation(rng, agent_count)
+    x = _compact_video_formation(rng, agent_count, spatial_scale)
     theta = rng.normal(0.0, 0.035, agent_count)
     heading = np.column_stack([np.cos(theta), np.sin(theta)])
     speed = np.full(agent_count, c.v0)
@@ -513,9 +530,14 @@ def export_present_recovery_video(
     # Scale the stagger to the smaller comparison flocks.  This is the same
     # near-path arrangement as the larger random-obstacle demonstration, but
     # avoids a fixed offset that would leave N=10 almost unperturbed.
-    lateral_offset = max(1.0, min(3.5, 0.25 * formation_height))
+    lateral_offset = max(
+        1.0 * spatial_scale,
+        min(3.5 * spatial_scale, 0.25 * formation_height),
+    )
     forward_edge = x[:, 0].max()
-    forward_offsets = (10.0, 24.0) if stationary_obstacles else (28.0, 50.0)
+    # Compact encounter spacing keeps the first obstacle near the visible
+    # forward edge and the second one staged just beyond it.
+    forward_offsets = (8.0, 16.0) if stationary_obstacles else (18.0, 30.0)
     obs_x = np.array([
         [forward_edge + forward_offsets[0], centre0[1] + lateral_offset],
         [forward_edge + forward_offsets[1], centre0[1] - lateral_offset],
@@ -536,9 +558,14 @@ def export_present_recovery_video(
     )
     peak_radius = baseline_radius
     body_diameter = np.hypot(c.agent_length, c.agent_width)
-    visible_obstacle_clearance = 0.40
+    crowd_scale = np.clip((agent_count - 10) / 20.0, 0.0, 1.0)
+    visible_obstacle_clearance = (
+        0.40 + 0.15 * crowd_scale
+    ) * spatial_scale
     obs_radius = np.full(2, body_diameter + visible_obstacle_clearance)
-    hard_agent_distance = body_diameter + 0.18
+    hard_agent_distance = body_diameter + (
+        0.18 + 0.12 * crowd_scale
+    ) * spatial_scale
     hard_obstacle_distance = body_diameter + visible_obstacle_clearance
     initial_pair_distance = np.linalg.norm(
         x[:, None, :] - x[None, :, :], axis=2
@@ -553,22 +580,32 @@ def export_present_recovery_video(
     ))
     minimum_polarization = 1.0
 
-    fig, ax = plt.subplots(figsize=(10.4, 6.4))
+    fig, ax = plt.subplots(
+        figsize=(640.0 / dpi, 540.0 / dpi),
+        facecolor="white",
+    )
     ax.set_aspect("equal")
-    ax.set_facecolor("#f7f8f4")
-    ax.grid(True, color="#d7ddd7", linewidth=0.55, alpha=0.75)
-    ax.set_xlabel("global x")
-    ax.set_ylabel("global y")
-    motion_label = (
-        "static obstacles"
+    ax.set_facecolor("white")
+    # The camera contains 32 x 32 one-unit grid cells.  Label every alternate
+    # line on a doubled display scale, so both axes visibly span 64 units.
+    ax.xaxis.set_major_locator(MultipleLocator(2.0))
+    ax.yaxis.set_major_locator(MultipleLocator(2.0))
+    ax.xaxis.set_minor_locator(MultipleLocator(1.0))
+    ax.yaxis.set_minor_locator(MultipleLocator(1.0))
+    doubled_units = FuncFormatter(lambda value, _position: f"{2.0 * value:g}")
+    ax.xaxis.set_major_formatter(doubled_units)
+    ax.yaxis.set_major_formatter(doubled_units)
+    ax.grid(True, which="both", color="#686868", linewidth=0.45, alpha=0.72)
+    ax.set_axisbelow(True)
+    ax.set_xlabel("x", fontsize=24)
+    ax.set_ylabel("y", fontsize=24)
+    ax.tick_params(axis="both", which="major", labelsize=8)
+    motion_title = (
+        "Static obstacles"
         if stationary_obstacles
-        else f"moving obstacles {obstacle_speed_ratio:g}x"
+        else f"Obstacle speed {obstacle_speed_ratio:g}x"
     )
-    obstacle_kind = "static obstacle" if stationary_obstacles else "moving obstacle"
-    ax.set_title(
-        f"Present controller: {motion_label} and recovery | N={agent_count}"
-    )
-
+    ax.set_title(f"{motion_title} | N={agent_count}", fontsize=13)
     speed_norm = plt.Normalize(c.v_min, c.v_max)
     agents = PolyCollection(
         _vehicle_polygons(x, heading, c.agent_length, c.agent_width),
@@ -598,26 +635,26 @@ def export_present_recovery_video(
     centre_marker = ax.scatter(
         [], [], marker="x", s=55, color="#111111", zorder=5
     )
-    status = ax.text(
-        0.01, 0.99, "", transform=ax.transAxes, va="top", ha="left"
+    metric_handles = [
+        Line2D([], [], linestyle="none", label="min/max speed: 0.00 / 0.00"),
+        Line2D([], [], linestyle="none", label="heading consensus: 1.000"),
+        Line2D([], [], linestyle="none", label=r"$d_{\min}^{\mathrm{obs}}$: 0.00"),
+        Line2D([], [], linestyle="none", label=r"$B_{\mathrm{rec}}$: 0.000 s"),
+    ]
+    metric_legend = ax.legend(
+        handles=metric_handles,
+        loc="upper right",
+        fontsize=11,
+        frameon=True,
+        framealpha=0.88,
+        facecolor="white",
+        edgecolor="none",
+        handlelength=0,
+        handletextpad=0,
+        borderpad=0.35,
+        labelspacing=0.3,
     )
-    ax.legend(
-        handles=[
-            Patch(
-                facecolor=plt.cm.Blues(0.65), edgecolor="#17365d",
-                label="swarm agent",
-            ),
-            Patch(
-                facecolor=obstacle_colours[0], edgecolor="black",
-                label=f"{obstacle_kind} 1",
-            ),
-            Patch(
-                facecolor=obstacle_colours[1], edgecolor="black",
-                label=f"{obstacle_kind} 2",
-            ),
-        ],
-        loc="lower right",
-    )
+    metric_texts = metric_legend.get_texts()
 
     step_number = 0
     pre_encounter_spans = []
@@ -630,8 +667,8 @@ def export_present_recovery_video(
 
     def update_view():
         centre = x.mean(axis=0)
-        ax.set_xlim(centre[0] - 43.0, centre[0] + 43.0)
-        ax.set_ylim(centre[1] - 22.0, centre[1] + 22.0)
+        ax.set_xlim(centre[0] - 16.0, centre[0] + 16.0)
+        ax.set_ylim(centre[1] - 16.0, centre[1] + 16.0)
         for index, rectangle in enumerate(obstacle_rectangles):
             rectangle.set_transform(
                 Affine2D()
@@ -749,8 +786,6 @@ def export_present_recovery_video(
                 recovery_samples.clear()
                 recovery_burden = 0.0
 
-        display_phase = "recovered" if recovery_complete else phase
-
         pair_distance = np.linalg.norm(
             x[:, None, :] - x[None, :, :], axis=2
         )
@@ -774,32 +809,38 @@ def export_present_recovery_video(
         centre_marker.set_offsets(centre.reshape(1, 2))
         update_view()
 
-        status.set_text(
-            f"step = {step_number}/{steps}   "
-            f"t = {step_number * c.dt:.2f} s   phase = {display_phase}\n"
-            f"minimum obstacle clearance, $d_{{\\min}}^{{\\mathrm{{obs}}}}$ = "
-            f"{minimum_obstacle_clearance:.2f}\n"
-            f"recovery burden, $B_{{\\mathrm{{rec}}}}$ (recent 1 s) = "
-            f"{recovery_burden:.3f} s\n"
-            f"heading coherence, P = {polarization:.3f}"
+        metric_texts[0].set_text(
+            f"min/max speed: {speed.min():.2f} / {speed.max():.2f}"
+        )
+        metric_texts[1].set_text(
+            f"heading consensus: {polarization:.3f}"
+        )
+        metric_texts[2].set_text(
+            rf"$d_{{\min}}^{{\mathrm{{obs}}}}$: "
+            f"{minimum_obstacle_clearance:.2f}"
+        )
+        metric_texts[3].set_text(
+            rf"$B_{{\mathrm{{rec}}}}$: {recovery_burden:.3f} s"
         )
         return [
-            agents, centre_marker, status, *obstacle_rectangles
+            agents, centre_marker, *metric_texts, *obstacle_rectangles
         ]
 
     update_view()
 
     def init_animation():
         centre_marker.set_offsets(centre0.reshape(1, 2))
-        status.set_text(
-            f"step = 0/{steps}   t = 0.00 s   phase = approach\n"
-            f"minimum obstacle clearance, $d_{{\\min}}^{{\\mathrm{{obs}}}}$ = "
-            f"{minimum_obstacle_clearance:.2f}\n"
-            "recovery burden, $B_{\\mathrm{rec}}$ (recent 1 s) = 0.000 s\n"
-            "heading coherence, P = 1.000"
+        metric_texts[0].set_text(
+            f"min/max speed: {speed.min():.2f} / {speed.max():.2f}"
         )
+        metric_texts[1].set_text("heading consensus: 1.000")
+        metric_texts[2].set_text(
+            rf"$d_{{\min}}^{{\mathrm{{obs}}}}$: "
+            f"{minimum_obstacle_clearance:.2f}"
+        )
+        metric_texts[3].set_text(r"$B_{\mathrm{rec}}$: 0.000 s")
         return [
-            agents, centre_marker, status, *obstacle_rectangles
+            agents, centre_marker, *metric_texts, *obstacle_rectangles
         ]
 
     animation = FuncAnimation(
@@ -822,10 +863,11 @@ def export_present_recovery_video(
             "comment": (
                 f"agents={agent_count}; steps={steps}; "
                 f"obstacle_speed_ratio={obstacle_speed_ratio:g}; "
-                "obstacles=2; visible_clearance=0.4"
+                f"obstacles=2; visible_clearance="
+                f"{visible_obstacle_clearance:g}"
             ),
         },
-        bitrate=2200,
+        bitrate=900,
     )
     print(
         f"Exporting {output} (N={agent_count}, {steps} steps) ...",
@@ -1526,8 +1568,8 @@ def main():
     parser.add_argument(
         "--video-fps",
         type=int,
-        default=25,
-        help="recovery-video playback frame rate (default: 25)",
+        default=15,
+        help="recovery-video playback frame rate (default: 15)",
     )
 
     parser.add_argument(

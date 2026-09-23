@@ -129,8 +129,8 @@ def parse_args(argv=None):
         help="simulated duration of an exported movie (default: 30)",
     )
     parser.add_argument(
-        "--fps", type=positive_int, default=25,
-        help="export playback frame rate (default: 25, matching model dt)",
+        "--fps", type=positive_int, default=15,
+        help="export playback frame rate (default: 15)",
     )
     parser.add_argument(
         "--dpi", type=positive_int, default=140,
@@ -469,12 +469,14 @@ def main(argv=None):
     spawn_obstacle(0)
 
     # --------------------------- plot ---------------------------
-    fig, ax = plt.subplots(figsize=(11, 6.3))
+    export_dpi = args.dpi if args.save is not None else 100
+    fig, ax = plt.subplots(figsize=(640.0 / export_dpi, 540.0 / export_dpi))
     ax.set_aspect("equal")
     ax.set_xlabel("global x")
     ax.set_ylabel("global y")
+    ax.tick_params(axis="both", which="major", labelsize=8)
     ax.set_title(
-        "Cognitive swarm in global motion: avoidance and reformation"
+        f"Cognitive swarm in global motion: avoidance and reformation | N={N}"
     )
     ax.set_facecolor("#f7f8f4")
     ax.grid(True, which="major", color="#ccd3cd", linewidth=0.65, alpha=0.75)
@@ -528,8 +530,10 @@ def main(argv=None):
         ax.add_patch(rect)
         obs_rects.append(rect)
 
-    status = ax.text(0.01, 0.99, "", transform=ax.transAxes,
-                     va="top", ha="left")
+    status = ax.text(
+        0.01, 0.99, "", transform=ax.transAxes,
+        va="top", ha="left", fontsize=8.5,
+    )
     agent_key = Patch(facecolor=plt.cm.Blues(0.65), edgecolor="#17365d",
                       label="flock agent (colour = speed)")
     obstacle_key = Patch(facecolor=obs_colors[0], edgecolor="black",
@@ -537,7 +541,15 @@ def main(argv=None):
     handles, labels = ax.get_legend_handles_labels()
     ax.legend(handles + [agent_key, obstacle_key],
               labels + [agent_key.get_label(), obstacle_key.get_label()],
-              loc="lower right")
+              loc="lower right", fontsize=9)
+
+    pre_encounter_spans = []
+    recovery_baseline_span = None
+    recovery_samples = []
+    recovery_burden = 0.0
+    encounter_started = False
+    recovery_dwell_count = 0
+    recovery_complete = False
 
     # The camera has its own state.  It looks ahead, moves only after the flock
     # crosses a dead zone, and eases toward its target.  Consequently the flock
@@ -577,6 +589,8 @@ def main(argv=None):
 
     def animate(_):
         nonlocal pos, heading, speed, sim_time
+        nonlocal recovery_baseline_span, recovery_burden, encounter_started
+        nonlocal recovery_dwell_count, recovery_complete
         sim_time += cfg.dt
 
         flock_c = pos.mean(axis=0)
@@ -696,6 +710,66 @@ def main(argv=None):
 
         flock_span_y = np.ptp(pos[:, 1])
         flock_span_x = np.ptp(pos[:, 0])
+        heading_consensus = float(np.linalg.norm(heading.mean(axis=0)))
+        if len(active):
+            relative_x = obs_pos[active, 0] - pos[:, 0].mean()
+            if np.any(np.abs(relative_x) <= 12.0):
+                phase_name = "avoidance"
+            elif np.max(relative_x) > 12.0:
+                phase_name = "approach"
+            else:
+                phase_name = "post-obstacle self-healing"
+        else:
+            phase_name = (
+                "post-obstacle self-healing"
+                if encounter_started
+                else "approach"
+            )
+
+        if recovery_complete and phase_name == "approach":
+            encounter_started = False
+            recovery_complete = False
+            pre_encounter_spans.clear()
+            recovery_samples.clear()
+            recovery_burden = 0.0
+            recovery_dwell_count = 0
+
+        if not encounter_started and phase_name == "approach":
+            pre_encounter_spans.append(float(flock_span_x))
+        elif not encounter_started and phase_name == "avoidance":
+            history_steps = max(1, int(0.75 / cfg.dt))
+            reference = pre_encounter_spans[-history_steps:]
+            recovery_baseline_span = max(
+                float(np.median(reference) if reference else flock_span_x),
+                1e-12,
+            )
+            encounter_started = True
+
+        if encounter_started and not recovery_complete:
+            normalized_deformation = abs(
+                flock_span_x / recovery_baseline_span - 1.0
+            )
+            recovery_samples.append(
+                normalized_deformation * cfg.dt
+                if phase_name == "avoidance"
+                else 0.0
+            )
+            window_steps = max(1, int(1.0 / cfg.dt))
+            if len(recovery_samples) > window_steps:
+                del recovery_samples[:-window_steps]
+            recovery_burden = float(np.sum(recovery_samples))
+
+            if (
+                phase_name == "post-obstacle self-healing"
+                and heading_consensus >= 0.99
+            ):
+                recovery_dwell_count += 1
+            else:
+                recovery_dwell_count = 0
+            if recovery_dwell_count >= max(1, int(0.40 / cfg.dt)):
+                recovery_complete = True
+                recovery_samples.clear()
+                recovery_burden = 0.0
 
         status.set_text(
             f"global flock x = {pos[:,0].mean():.1f}   "
@@ -705,9 +779,11 @@ def main(argv=None):
             f"components = {components}   "
             f"span x/y = {flock_span_x:.1f} / {flock_span_y:.1f}   "
             f"min agent gap = {min_agent_dist:.2f}\n"
-            f"{clearance_text}   "
+            f"{clearance_text}\n"
             f"mean rejoin rho = {out['rho'].mean():.2f}   "
-            f"mean manoeuvre mu = {out['mu'].mean():.2f}"
+            f"mean manoeuvre mu = {out['mu'].mean():.2f}\n"
+            f"recovery burden, $B_{{\mathrm{{rec}}}}$ = "
+            f"{recovery_burden:.3f} s"
         )
 
         return [agents, centre, centre_trail, status, *obs_rects]
@@ -740,7 +816,7 @@ def main(argv=None):
         writer = FFMpegWriter(
             fps=args.fps,
             metadata={"title": "Cognitive Swarm Robots 2-D"},
-            bitrate=2400,
+            bitrate=900,
         )
         frame_count = len(frames)
         print(

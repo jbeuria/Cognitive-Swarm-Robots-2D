@@ -56,7 +56,7 @@ All command-line controls have defaults:
 |:--|:--|:--|
 | `--save [FILE.mp4]` | disabled; filename is `cognitive_swarm_demo.mp4` when flagged without a value | Export MP4 instead of opening the live window |
 | `--duration SECONDS` | `30` | Simulated duration of the exported movie |
-| `--fps FPS` | `25` | Movie playback frame rate; 25 matches the model time step |
+| `--fps FPS` | `15` | Movie playback frame rate |
 | `--dpi DPI` | `140` | Export resolution |
 | `--agents N` | `36` | Number of flock agents |
 | `--obstacles N` | `5` | Number of reusable random-obstacle slots |
@@ -578,13 +578,13 @@ The generated video sets are organized as follows:
 
 | Location | Contents | Primary overlay convention |
 |:--|:--|:--|
-| `Self-healing videos/` | present controller, N = 10, 20, 30; stationary obstacles | `d_obs_min`, recent `B_rec_live`, `P` |
+| `Self-healing videos/Static/` | present controller, N = 10, 20, 30; stationary obstacles | `d_obs_min`, recent `B_rec_live`, `P` |
 | `Self-healing videos/speed_1x/` | same sizes; oncoming obstacle speed `v0` | same live metrics |
 | `Self-healing videos/speed_2x/` | same sizes; oncoming obstacle speed `2 * v0` | same live metrics |
-| `zero_obstacle_videos/` | N = 50, 100, 200; no obstacles | instantaneous body clearance and running minima |
-| `single_obstacle_videos/` | N = 50, 100, 200; one stationary obstacle | instantaneous body clearance and running minima |
-| `two_obstacle_videos/` | N = 50, 100, 200; stationary and moving two-obstacle cases | instantaneous body clearance and running minima |
-| `results/swarm.mp4` | asynchronous traffic from `swarm_demo.py` | controller-envelope clearance, graph components, spans, `rho`, `mu` |
+| `zero_obstacle_videos/` | N = 50, 100, 200; no obstacles | speed range, `P`, and zero `B_rec_live` |
+| `single_obstacle_videos/` | N = 50, 100, 200; one stationary obstacle | speed range, `P`, recent `B_rec_live` |
+| `two_obstacle_videos/` | N = 50, 100, 200; stationary and moving two-obstacle cases | speed range, `P`, recent `B_rec_live` |
+| `results/swarm.mp4` | asynchronous traffic from `swarm_demo.py` | clearance, graph components, spans, `rho`, `mu`, recent `B_rec_live` |
 
 ### Unbounded longitudinal evolution and split–reformation diagnostic
 
